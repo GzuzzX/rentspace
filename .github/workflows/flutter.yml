@@ -3,11 +3,14 @@ on: [push, pull_request]
 jobs:
   validate:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rentspace-frontend
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.47.9'
+          flutter-version: '3.44.8'
           channel: stable
           cache: true
       - run: flutter pub get

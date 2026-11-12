@@ -1,0 +1,223 @@
+[
+  {
+    "id": "rentspace_api_collection",
+    "name": "RentSpace API",
+    "description": "Complete verified RentSpace REST API Collection for LiteClient",
+    "variables": [
+      {
+        "id": "var_base_url",
+        "name": "baseUrl",
+        "initialValue": "http://localhost:3000",
+        "currentValue": "http://localhost:3000",
+        "type": "default",
+        "enabled": true
+      }
+    ],
+    "items": [
+      {
+        "id": "req_01_health",
+        "name": "01. Health Check",
+        "type": "request",
+        "method": "GET",
+        "url": "{{baseUrl}}/api/health",
+        "headers": {},
+        "body": {
+          "mode": "none"
+        }
+      },
+      {
+        "id": "req_02_login_renter",
+        "name": "02. Login (Renter)",
+        "type": "request",
+        "method": "POST",
+        "url": "{{baseUrl}}/api/auth/login",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "mode": "raw",
+          "rawType": "json",
+          "value": "{\n  \"email\": \"renter@demo.com\",\n  \"password\": \"demo1234\"\n}"
+        }
+      },
+      {
+        "id": "req_03_login_owner",
+        "name": "03. Login (Owner)",
+        "type": "request",
+        "method": "POST",
+        "url": "{{baseUrl}}/api/auth/login",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "mode": "raw",
+          "rawType": "json",
+          "value": "{\n  \"email\": \"owner@demo.com\",\n  \"password\": \"demo1234\"\n}"
+        }
+      },
+      {
+        "id": "req_04_login_admin",
+        "name": "04. Login (Admin)",
+        "type": "request",
+        "method": "POST",
+        "url": "{{baseUrl}}/api/auth/login",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "mode": "raw",
+          "rawType": "json",
+          "value": "{\n  \"email\": \"admin@demo.com\",\n  \"password\": \"demo1234\"\n}"
+        }
+      },
+      {
+        "id": "req_05_register",
+        "name": "05. Register New User",
+        "type": "request",
+        "method": "POST",
+        "url": "{{baseUrl}}/api/auth/register",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "mode": "raw",
+          "rawType": "json",
+          "value": "{\n  \"name\": \"สมชาย ใจดี\",\n  \"email\": \"somchai_test@demo.com\",\n  \"password\": \"demo1234\",\n  \"role\": \"renter\",\n  \"phone\": \"0812345678\"\n}"
+        }
+      },
+      {
+        "id": "req_06_profile",
+        "name": "06. Current Profile (Me)",
+        "type": "request",
+        "method": "GET",
+        "url": "{{baseUrl}}/api/auth/me",
+        "headers": {
+          "Authorization": "Bearer {{renterToken}}"
+        },
+        "body": {
+          "mode": "none"
+        }
+      },
+      {
+        "id": "req_07_spaces",
+        "name": "07. Get All Spaces",
+        "type": "request",
+        "method": "GET",
+        "url": "{{baseUrl}}/api/spaces",
+        "headers": {},
+        "body": {
+          "mode": "none"
+        }
+      },
+      {
+        "id": "req_08_search",
+        "name": "08. Search Spaces",
+        "type": "request",
+        "method": "GET",
+        "url": "{{baseUrl}}/api/spaces?search=แสงเหนือ",
+        "headers": {},
+        "body": {
+          "mode": "none"
+        }
+      },
+      {
+        "id": "req_09_space_detail",
+        "name": "09. Space Details (space-1)",
+        "type": "request",
+        "method": "GET",
+        "url": "{{baseUrl}}/api/spaces/space-1",
+        "headers": {},
+        "body": {
+          "mode": "none"
+        }
+      },
+      {
+        "id": "req_10_slots",
+        "name": "10. Space Slots Availability",
+        "type": "request",
+        "method": "GET",
+        "url": "{{baseUrl}}/api/spaces/space-1/slots?date=2026-11-20",
+        "headers": {},
+        "body": {
+          "mode": "none"
+        }
+      },
+      {
+        "id": "req_11_owner_spaces",
+        "name": "11. Owner Spaces (Mine)",
+        "type": "request",
+        "method": "GET",
+        "url": "{{baseUrl}}/api/spaces/owner/mine",
+        "headers": {
+          "Authorization": "Bearer {{ownerToken}}"
+        },
+        "body": {
+          "mode": "none"
+        }
+      },
+      {
+        "id": "req_12_bookings",
+        "name": "12. Get Bookings List",
+        "type": "request",
+        "method": "GET",
+        "url": "{{baseUrl}}/api/bookings",
+        "headers": {
+          "Authorization": "Bearer {{renterToken}}"
+        },
+        "body": {
+          "mode": "none"
+        }
+      },
+      {
+        "id": "req_13_admin_spaces",
+        "name": "13. Admin All Spaces",
+        "type": "request",
+        "method": "GET",
+        "url": "{{baseUrl}}/api/admin/spaces",
+        "headers": {
+          "Authorization": "Bearer {{adminToken}}"
+        },
+        "body": {
+          "mode": "none"
+        }
+      },
+      {
+        "id": "req_14_admin_users",
+        "name": "14. Admin All Users",
+        "type": "request",
+        "method": "GET",
+        "url": "{{baseUrl}}/api/admin/users",
+        "headers": {
+          "Authorization": "Bearer {{adminToken}}"
+        },
+        "body": {
+          "mode": "none"
+        }
+      },
+      {
+        "id": "req_15_admin_bookings",
+        "name": "15. Admin All Bookings",
+        "type": "request",
+        "method": "GET",
+        "url": "{{baseUrl}}/api/admin/bookings",
+        "headers": {
+          "Authorization": "Bearer {{adminToken}}"
+        },
+        "body": {
+          "mode": "none"
+        }
+      },
+      {
+        "id": "req_16_line_health",
+        "name": "16. LINE Client Health",
+        "type": "request",
+        "method": "GET",
+        "url": "{{baseUrl}}/api/line/health",
+        "headers": {},
+        "body": {
+          "mode": "none"
+        }
+      }
+    ]
+  }
+]
