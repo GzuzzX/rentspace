@@ -20,6 +20,8 @@ import 'package:rentspace/ui/home_page.dart';
 import 'package:rentspace/ui/login_page.dart';
 import 'package:rentspace/ui/space_form.dart';
 
+import 'xampp_db_fixture.dart';
+
 class MockAuthController extends Mock implements AuthController {}
 
 class MockSpaceController extends Mock implements SpaceController {}
@@ -48,7 +50,7 @@ class TestStore extends AppStore {
   }
 }
 
-final _clockNow = DateTime(2026, 6, 15, 10, 0);
+final _clockNow = DateTime(2026, 11, 16, 12, 0);
 
 final _validPngBytes = base64Decode(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
@@ -56,130 +58,17 @@ final _validPngBytes = base64Decode(
 
 final _corruptImageBytes = Uint8List.fromList([1, 2, 3, 4]);
 
-TestStore _createSeededStore() {
+late Map<String, dynamic> _xamppSnapshot;
+
+TestStore _createSeededStore({
+  String viewerId = '1002',
+  bool signedIn = true,
+}) {
   final store = TestStore(clock: () => _clockNow);
-
-  final renter = AppUser(
-    id: '1001',
-    name: 'ผู้เช่า หนึ่ง',
-    email: 'renter@rentspace.test',
-    password: 'password',
-    role: UserRole.renter,
-    phone: '081-111-1111',
-  );
-  final owner = AppUser(
-    id: '1002',
-    name: 'เจ้าของ พื้นที่',
-    email: 'owner@rentspace.test',
-    password: 'password',
-    role: UserRole.owner,
-    phone: '082-222-2222',
-    bankInfo: 'กสิกรไทย 123-4-56789-0',
-  );
-  final admin = AppUser(
-    id: '1003',
-    name: 'แอดมิน ระบบ',
-    email: 'admin@rentspace.test',
-    password: 'password',
-    role: UserRole.admin,
-    phone: '083-333-3333',
-  );
-  store.users.addAll([renter, owner, admin]);
-
-  store.spaces.addAll([
-    Space(
-      id: '2001',
-      ownerId: '1002',
-      name: 'สตูดิโอ กลางเมือง',
-      category: 'ห้องประชุม',
-      location: 'สยาม กรุงเทพ',
-      price: 350,
-      capacity: 10,
-      description: 'ห้องประชุมแสงธรรมชาติ',
-      imageBytes: _validPngBytes,
-      amenities: ['Wi-Fi', 'โปรเจกเตอร์'],
-      status: SpaceStatus.approved,
-    ),
-    Space(
-      id: '2002',
-      ownerId: '1002',
-      name: 'เวิร์กสเปซ อารีย์',
-      category: 'Co-Working',
-      location: 'อารีย์ กรุงเทพ',
-      price: 200,
-      capacity: 4,
-      description: 'มุมทำงานเงียบสงบ',
-      amenities: ['Wi-Fi'],
-      status: SpaceStatus.approved,
-    ),
-  ]);
-
-  final reviewBooking = Booking(
-    id: '3001',
-    spaceId: '2001',
-    ownerId: '1002',
-    renterId: '1001',
-    spaceName: 'สตูดิโอ กลางเมือง',
-    date: _clockNow.add(const Duration(days: 5)),
-    startMinutes: 540,
-    endMinutes: 660,
-    rentAmount: 700,
-    status: BookingStatus.ownerReview,
-  )..createdAt = _clockNow;
-
-  final paymentDueBooking = Booking(
-    id: '3002',
-    spaceId: '2001',
-    ownerId: '1002',
-    renterId: '1001',
-    spaceName: 'สตูดิโอ กลางเมือง',
-    date: _clockNow.add(const Duration(days: 6)),
-    startMinutes: 540,
-    endMinutes: 660,
-    rentAmount: 700,
-    status: BookingStatus.paymentDue,
-  )
-    ..createdAt = _clockNow
-    ..approvedAt = _clockNow;
-
-  final pastConfirmedBooking = Booking(
-    id: '3003',
-    spaceId: '2002',
-    ownerId: '1002',
-    renterId: '1001',
-    spaceName: 'เวิร์กสเปซ อารีย์',
-    date: _clockNow.subtract(const Duration(days: 1)),
-    startMinutes: 540,
-    endMinutes: 660,
-    rentAmount: 400,
-    status: BookingStatus.confirmed,
-  )
-    ..createdAt = _clockNow.subtract(const Duration(days: 3))
-    ..approvedAt = _clockNow.subtract(const Duration(days: 2))
-    ..confirmedAt = _clockNow.subtract(const Duration(days: 2));
-
-  final completedBooking = Booking(
-    id: '3004',
-    spaceId: '2002',
-    ownerId: '1002',
-    renterId: '1001',
-    spaceName: 'เวิร์กสเปซ อารีย์',
-    date: _clockNow.subtract(const Duration(days: 2)),
-    startMinutes: 540,
-    endMinutes: 660,
-    rentAmount: 400,
-    status: BookingStatus.completed,
-  )
-    ..createdAt = _clockNow.subtract(const Duration(days: 4))
-    ..completedAt = _clockNow.subtract(const Duration(days: 2));
-
-  store.bookings.addAll([
-    reviewBooking,
-    paymentDueBooking,
-    pastConfirmedBooking,
-    completedBooking,
-  ]);
-
+  populateStoreFromXamppSnapshot(store, _xamppSnapshot, viewerId: viewerId);
+  if (!signedIn) {
+    store.currentUser = null;
+  }
   return store;
 }
 
@@ -375,7 +264,10 @@ Future<void> _unmountTree(WidgetTester tester) async {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(_registerFallbacks);
+  setUpAll(() async {
+    _registerFallbacks();
+    _xamppSnapshot = await loadXamppSnapshot();
+  });
 
   testWidgets(
     '1. At first, session restore shows CircularProgressIndicator then LoginPage',
@@ -383,7 +275,7 @@ void main() {
       await _setPhoneViewport(tester);
       addTearDown(() => _resetViewport(tester));
 
-      final store = _createSeededStore();
+      final store = _createSeededStore(signedIn: false);
       final mocks = _ControllerBundle(store);
       final restoreCompleter = Completer<AppUser?>();
       when(
@@ -418,17 +310,17 @@ void main() {
       await _setPhoneViewport(tester);
       addTearDown(() => _resetViewport(tester));
 
-      final store = _createSeededStore();
+      final store = _createSeededStore(signedIn: false);
       final mocks = _ControllerBundle(store);
 
       when(
         () => mocks.auth.loginAsync('', ''),
       ).thenThrow(DomainError('กรุณากรอกอีเมลและรหัสผ่าน'));
       when(
-        () => mocks.auth.loginAsync('renter@rentspace.test', 'wrongpass'),
+        () => mocks.auth.loginAsync('renter01@rentspace.test', 'wrongpass'),
       ).thenThrow(ApiError('อีเมลหรือรหัสผ่านไม่ถูกต้อง', 401));
       when(
-        () => mocks.auth.loginAsync('renter@rentspace.test', 'password'),
+        () => mocks.auth.loginAsync('renter01@rentspace.test', 'password'),
       ).thenThrow(
         ApiError(
           'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาตรวจสอบเครือข่ายและ API_BASE_URL',
@@ -454,7 +346,7 @@ void main() {
       await _enterText(
         tester,
         _textFieldByLabel('อีเมล'),
-        'renter@rentspace.test',
+        'renter01@rentspace.test',
       );
       await _enterText(
         tester,
@@ -493,18 +385,21 @@ void main() {
       await _setPhoneViewport(tester);
       addTearDown(() => _resetViewport(tester));
 
-      final store = _createSeededStore();
-      final seededSnapshot = _createSeededStore();
+      final store = _createSeededStore(signedIn: false);
+      final userIdByEmail = {
+        for (final raw in _xamppSnapshot['users'] as List)
+          raw['email'] as String: '${raw['id']}',
+      };
       final mocks = _ControllerBundle(store);
 
       when(() => mocks.auth.loginAsync(any(), any())).thenAnswer((inv) async {
         final email = inv.positionalArguments[0] as String;
-        if (store.users.isEmpty) {
-          store.users.addAll(seededSnapshot.users);
-          store.spaces.addAll(seededSnapshot.spaces);
-          store.bookings.addAll(seededSnapshot.bookings);
-        }
-        store.currentUser = store.users.firstWhere((u) => u.email == email);
+        final viewerId = userIdByEmail[email]!;
+        populateStoreFromXamppSnapshot(
+          store,
+          _xamppSnapshot,
+          viewerId: viewerId,
+        );
         store.notify();
       });
 
@@ -520,13 +415,16 @@ void main() {
       await tester.pumpAndSettle();
 
       for (final (email, expectedTabs) in [
-        ('renter@rentspace.test', ['ค้นหา', 'การจอง', 'รายการโปรด', 'โปรไฟล์']),
         (
-          'owner@rentspace.test',
+          'renter01@rentspace.test',
+          ['ค้นหา', 'การจอง', 'รายการโปรด', 'โปรไฟล์'],
+        ),
+        (
+          'owner01@rentspace.test',
           ['ภาพรวม', 'พื้นที่', 'การจอง', 'รายรับ', 'โปรไฟล์'],
         ),
         (
-          'admin@rentspace.test',
+          'admin01@rentspace.test',
           ['ภาพรวม', 'ตรวจสอบ', 'การเงิน', 'ผู้ใช้', 'โปรไฟล์'],
         ),
       ]) {
@@ -568,8 +466,7 @@ void main() {
       await _setPhoneViewport(tester);
       addTearDown(() => _resetViewport(tester));
 
-      final store = _createSeededStore();
-      store.currentUser = store.users.firstWhere((u) => u.id == '1001');
+      final store = _createSeededStore(viewerId: '1002');
       final mocks = _ControllerBundle(store);
 
       await tester.pumpWidget(
@@ -584,8 +481,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(HomePage), findsOneWidget);
-      expect(find.text('สตูดิโอ กลางเมือง'), findsOneWidget);
-      expect(find.text('เวิร์กสเปซ อารีย์'), findsOneWidget);
+      expect(find.text('ห้องประชุมสว่างใจ'), findsOneWidget);
+      expect(find.text('The Quiet Nook (ห้องอ่านหนังสือ)'), findsOneWidget);
 
       await _enterText(
         tester,
@@ -599,14 +496,15 @@ void main() {
 
       await _tapWidget(tester, find.byTooltip('ล้างคำค้นหา'));
       await _tapWidget(tester, find.byKey(const ValueKey('open-filter-btn')));
-      await _tapWidget(tester, find.widgetWithText(ChoiceChip, 'ห้องประชุม'));
+      await _tapWidget(tester, find.widgetWithText(ChoiceChip, 'meeting_room'));
       await _tapWidget(tester, find.text('ไม่เกิน ฿600'));
       await _tapWidget(tester, find.text('8+ คน'));
       await _tapWidget(tester, find.widgetWithText(FilledButton, 'ดูผลลัพธ์'));
 
       expect(find.text('ตัวกรอง (3)'), findsOneWidget);
-      expect(find.text('สตูดิโอ กลางเมือง'), findsOneWidget);
-      expect(find.text('เวิร์กสเปซ อารีย์'), findsNothing);
+      expect(find.text('ห้องประชุมสว่างใจ'), findsOneWidget);
+      expect(find.text('The Quiet Nook (ห้องอ่านหนังสือ)'), findsNothing);
+      expect(find.text('ห้อง nitro'), findsNothing);
 
       verify(
         () => mocks.space.filterSpaces(
@@ -629,8 +527,7 @@ void main() {
       await _setPhoneViewport(tester);
       addTearDown(() => _resetViewport(tester));
 
-      final store = _createSeededStore();
-      store.currentUser = store.users.firstWhere((u) => u.id == '1002');
+      final store = _createSeededStore(viewerId: '1001');
       final mocks = _ControllerBundle(store);
 
       when(
@@ -657,7 +554,7 @@ void main() {
         if (id == null) {
           final created = Space(
             id: '2099',
-            ownerId: '1002',
+            ownerId: '1001',
             name: name.trim(),
             category: inv.namedArguments[#category] as String,
             location: inv.namedArguments[#location] as String,
@@ -732,7 +629,7 @@ void main() {
       await _enterText(
         tester,
         _textFieldByLabel('ชื่อพื้นที่'),
-        'สตูดิโอ กลางเมือง (แก้ไขแล้ว)',
+        'ห้องประชุมสว่างใจ (แก้ไขแล้ว)',
       );
       await _tapWidget(
         tester,
@@ -740,7 +637,7 @@ void main() {
       );
 
       expect(find.byType(HomePage), findsOneWidget);
-      expect(find.text('สตูดิโอ กลางเมือง (แก้ไขแล้ว)'), findsOneWidget);
+      expect(find.text('ห้องประชุมสว่างใจ (แก้ไขแล้ว)'), findsOneWidget);
 
       await _unmountTree(tester);
     },
@@ -752,8 +649,8 @@ void main() {
       await _setPhoneViewport(tester);
       addTearDown(() => _resetViewport(tester));
 
-      final store = _createSeededStore();
-      store.currentUser = store.users.firstWhere((u) => u.id == '1001');
+      final store = _createSeededStore(viewerId: '1002');
+      final targetSpace = store.space('2001');
       final mocks = _ControllerBundle(store);
 
       var createCalls = 0;
@@ -776,13 +673,13 @@ void main() {
         final booking = Booking(
           id: '3999',
           spaceId: inv.positionalArguments[0] as String,
-          ownerId: '1002',
-          renterId: '1001',
-          spaceName: 'สตูดิโอ กลางเมือง',
+          ownerId: targetSpace.ownerId,
+          renterId: '1002',
+          spaceName: targetSpace.name,
           date: inv.positionalArguments[1] as DateTime,
           startMinutes: inv.positionalArguments[2] as int,
           endMinutes: inv.positionalArguments[3] as int,
-          rentAmount: 700,
+          rentAmount: targetSpace.price * 2,
           attendees: inv.namedArguments[#attendees] as int? ?? 1,
           zone: inv.namedArguments[#zone] as String? ?? 'โซนหลัก (พื้นที่มาตรฐาน)',
           status: BookingStatus.ownerReview,
@@ -803,7 +700,7 @@ void main() {
           ],
           home: ReservePage(
             store: store,
-            space: store.space('2001'),
+            space: targetSpace,
             bookingController: mocks.booking,
             spaceController: mocks.space,
             authController: mocks.auth,
@@ -864,29 +761,50 @@ void main() {
       await _setPhoneViewport(tester);
       addTearDown(() => _resetViewport(tester));
 
-      final store = _createSeededStore();
+      final store = _createSeededStore(viewerId: '1002');
+      final reviewBooking = findOrSeedBooking(
+        store,
+        status: BookingStatus.ownerReview,
+        spaceId: '2001',
+        renterId: '1002',
+      );
+      final confirmedBooking = findOrSeedBooking(
+        store,
+        status: BookingStatus.confirmed,
+        preferredId: '3001',
+        spaceId: '2001',
+        overrideDate: _clockNow.subtract(const Duration(days: 1)),
+      );
+      final rejectedBooking = findOrSeedBooking(
+        store,
+        status: BookingStatus.ownerRejected,
+        preferredId: '3020',
+        spaceId: '2001',
+      );
       final mocks = _ControllerBundle(store);
 
-      when(() => mocks.booking.ownerReviewAsync('3001', true, '')).thenAnswer((
-        _,
-      ) async {
-        store.booking('3001').status = BookingStatus.paymentDue;
-        store.booking('3001').approvedAt = _clockNow;
+      when(
+        () => mocks.booking.ownerReviewAsync(reviewBooking.id, true, ''),
+      ).thenAnswer((_) async {
+        reviewBooking.status = BookingStatus.paymentDue;
+        reviewBooking.approvedAt = _clockNow;
         store.notify();
       });
-      when(() => mocks.booking.completeAsync('3003')).thenAnswer((_) async {
-        store.booking('3003').status = BookingStatus.completed;
-        store.booking('3003').completedAt = _clockNow;
+      when(() => mocks.booking.completeAsync(confirmedBooking.id)).thenAnswer((
+        _,
+      ) async {
+        confirmedBooking.status = BookingStatus.completed;
+        confirmedBooking.completedAt = _clockNow;
         store.notify();
       });
 
-      store.currentUser = store.users.firstWhere((u) => u.id == '1001');
+      store.currentUser = store.user(reviewBooking.renterId);
       await tester.pumpWidget(
         MaterialApp(
           locale: const Locale('th'),
           home: BookingPage(
             store: store,
-            bookingId: '3001',
+            bookingId: reviewBooking.id,
             bookingController: mocks.booking,
             paymentController: mocks.payment,
             spaceController: mocks.space,
@@ -899,13 +817,13 @@ void main() {
       expect(find.text('แนบ / ส่งสลิปใหม่'), findsNothing);
       await _unmountTree(tester);
 
-      store.currentUser = store.users.firstWhere((u) => u.id == '1002');
+      store.currentUser = store.user(reviewBooking.ownerId);
       await tester.pumpWidget(
         MaterialApp(
           locale: const Locale('th'),
           home: BookingPage(
             store: store,
-            bookingId: '3001',
+            bookingId: reviewBooking.id,
             bookingController: mocks.booking,
             paymentController: mocks.payment,
             spaceController: mocks.space,
@@ -916,16 +834,19 @@ void main() {
       expect(find.text('อนุมัติคำขอ'), findsOneWidget);
       expect(find.text('ปฏิเสธคำขอ'), findsOneWidget);
       await _tapWidget(tester, find.widgetWithText(FilledButton, 'อนุมัติคำขอ'));
-      verify(() => mocks.booking.ownerReviewAsync('3001', true, '')).called(1);
+      verify(
+        () => mocks.booking.ownerReviewAsync(reviewBooking.id, true, ''),
+      ).called(1);
       expect(find.text('อนุมัติคำขอ'), findsNothing);
       await _unmountTree(tester);
 
+      store.currentUser = store.user(confirmedBooking.ownerId);
       await tester.pumpWidget(
         MaterialApp(
           locale: const Locale('th'),
           home: BookingPage(
             store: store,
-            bookingId: '3003',
+            bookingId: confirmedBooking.id,
             bookingController: mocks.booking,
             paymentController: mocks.payment,
             spaceController: mocks.space,
@@ -937,7 +858,7 @@ void main() {
         tester,
         find.widgetWithText(FilledButton, 'ทำเครื่องหมายว่าใช้บริการแล้ว'),
       );
-      verify(() => mocks.booking.completeAsync('3003')).called(1);
+      verify(() => mocks.booking.completeAsync(confirmedBooking.id)).called(1);
       expect(find.text('เสร็จสิ้น'), findsWidgets);
       await _unmountTree(tester);
 
@@ -946,7 +867,7 @@ void main() {
           locale: const Locale('th'),
           home: BookingPage(
             store: store,
-            bookingId: '3004',
+            bookingId: rejectedBooking.id,
             bookingController: mocks.booking,
             paymentController: mocks.payment,
             spaceController: mocks.space,
@@ -966,14 +887,20 @@ void main() {
       await _setPhoneViewport(tester);
       addTearDown(() => _resetViewport(tester));
 
-      final store = _createSeededStore();
+      final store = _createSeededStore(viewerId: '1003');
+      final paymentDueBooking = findOrSeedBooking(
+        store,
+        status: BookingStatus.paymentDue,
+        preferredId: '3034',
+        spaceId: '2001',
+      );
+      final targetBookingId = paymentDueBooking.id;
       final mocks = _ControllerBundle(store);
 
       when(
-        () => mocks.payment.submitAsync('3002', any(), any(), any()),
+        () => mocks.payment.submitAsync(targetBookingId, any(), any(), any()),
       ).thenAnswer((inv) async {
-        final targetBooking = store.booking('3002');
-        targetBooking.slips.add(
+        paymentDueBooking.slips.add(
           PaymentSlip(
             name: inv.positionalArguments[1] as String,
             bytes: inv.positionalArguments[2] as Uint8List,
@@ -981,28 +908,31 @@ void main() {
             note: inv.positionalArguments[3] as String,
           ),
         );
-        targetBooking.status = BookingStatus.slipReview;
+        paymentDueBooking.status = BookingStatus.slipReview;
         store.notify();
       });
       when(
-        () => mocks.payment.reviewAsync('3002', false, 'สลิปเบลอ ยอดไม่ตรง'),
+        () => mocks.payment.reviewAsync(
+          targetBookingId,
+          false,
+          'สลิปเบลอ ยอดไม่ตรง',
+        ),
       ).thenAnswer((_) async {
-        final targetBooking = store.booking('3002');
-        targetBooking.status = BookingStatus.slipRejected;
-        targetBooking.reason = 'สลิปเบลอ ยอดไม่ตรง';
-        targetBooking.reasonKind = ReasonKind.slipRejected;
-        targetBooking.slips.last.rejectionReason = 'สลิปเบลอ ยอดไม่ตรง';
-        targetBooking.slipRejectedAt = _clockNow;
+        paymentDueBooking.status = BookingStatus.slipRejected;
+        paymentDueBooking.reason = 'สลิปเบลอ ยอดไม่ตรง';
+        paymentDueBooking.reasonKind = ReasonKind.slipRejected;
+        paymentDueBooking.slips.last.rejectionReason = 'สลิปเบลอ ยอดไม่ตรง';
+        paymentDueBooking.slipRejectedAt = _clockNow;
         store.notify();
       });
 
-      store.currentUser = store.users.firstWhere((u) => u.id == '1001');
+      store.currentUser = store.user(paymentDueBooking.renterId);
       await tester.pumpWidget(
         MaterialApp(
           locale: const Locale('th'),
           home: BookingPage(
             store: store,
-            bookingId: '3002',
+            bookingId: targetBookingId,
             pickSlip: (_) async => (name: 'slip1.png', bytes: _validPngBytes),
             bookingController: mocks.booking,
             paymentController: mocks.payment,
@@ -1030,16 +960,16 @@ void main() {
         tester,
         find.widgetWithText(FilledButton, 'ส่งสลิปเพื่อตรวจสอบ'),
       );
-      expect(store.booking('3002').status, BookingStatus.slipReview);
+      expect(paymentDueBooking.status, BookingStatus.slipReview);
       await _unmountTree(tester);
 
-      store.currentUser = store.users.firstWhere((u) => u.id == '1003');
+      store.currentUser = store.user('1003');
       await tester.pumpWidget(
         MaterialApp(
           locale: const Locale('th'),
           home: BookingPage(
             store: store,
-            bookingId: '3002',
+            bookingId: targetBookingId,
             bookingController: mocks.booking,
             paymentController: mocks.payment,
             spaceController: mocks.space,
@@ -1057,16 +987,16 @@ void main() {
         'สลิปเบลอ ยอดไม่ตรง',
       );
       await _tapWidget(tester, find.widgetWithText(FilledButton, 'ยืนยัน'));
-      expect(store.booking('3002').status, BookingStatus.slipRejected);
+      expect(paymentDueBooking.status, BookingStatus.slipRejected);
       await _unmountTree(tester);
 
-      store.currentUser = store.users.firstWhere((u) => u.id == '1001');
+      store.currentUser = store.user(paymentDueBooking.renterId);
       await tester.pumpWidget(
         MaterialApp(
           locale: const Locale('th'),
           home: BookingPage(
             store: store,
-            bookingId: '3002',
+            bookingId: targetBookingId,
             pickSlip: (_) async => (name: 'slip2.png', bytes: _validPngBytes),
             bookingController: mocks.booking,
             paymentController: mocks.payment,
@@ -1090,13 +1020,17 @@ void main() {
         find.widgetWithText(FilledButton, 'ส่งสลิปเพื่อตรวจสอบ'),
       );
 
-      expect(store.booking('3002').slips.length, 2);
+      expect(paymentDueBooking.slips.length, 2);
       expect(find.text('ประวัติสลิปก่อนหน้า (1 รายการ)'), findsOneWidget);
       verify(
-        () => mocks.payment.submitAsync('3002', any(), any(), any()),
+        () => mocks.payment.submitAsync(targetBookingId, any(), any(), any()),
       ).called(2);
       verify(
-        () => mocks.payment.reviewAsync('3002', false, 'สลิปเบลอ ยอดไม่ตรง'),
+        () => mocks.payment.reviewAsync(
+          targetBookingId,
+          false,
+          'สลิปเบลอ ยอดไม่ตรง',
+        ),
       ).called(1);
 
       await _unmountTree(tester);
@@ -1111,9 +1045,9 @@ void main() {
 
       final corruptSpace = Space(
         id: '2999',
-        ownerId: '1002',
+        ownerId: '1001',
         name: 'ห้องภาพเสีย',
-        category: 'ห้องประชุม',
+        category: 'meeting_room',
         location: 'กรุงเทพ',
         price: 300,
         capacity: 6,
@@ -1168,8 +1102,7 @@ void main() {
       await _setPhoneViewport(tester);
       addTearDown(() => _resetViewport(tester));
 
-      final store = _createSeededStore();
-      store.currentUser = store.users.firstWhere((u) => u.id == '1001');
+      final store = _createSeededStore(viewerId: '1002');
       store.failNextRefresh = true;
       final mocks = _ControllerBundle(store);
 
@@ -1206,10 +1139,10 @@ void main() {
       addTearDown(() => _resetViewport(tester));
 
       final longThai = List.filled(18, 'ข้อความทดสอบหน้าจอเล็กแบบยาว').join(' ');
-      final store = _createSeededStore();
-      store.currentUser = store.users.firstWhere((u) => u.id == '1001');
-      store.spaces.first.name = longThai;
-      store.spaces.first.location = longThai;
+      final store = _createSeededStore(viewerId: '1002');
+      final featuredSpace = store.space('2001');
+      featuredSpace.name = longThai;
+      featuredSpace.location = longThai;
       final mocks = _ControllerBundle(store);
 
       await tester.pumpWidget(
@@ -1229,7 +1162,7 @@ void main() {
           locale: const Locale('th'),
           home: SpaceForm(
             store: store,
-            space: store.spaces.first,
+            space: featuredSpace,
             spaceController: mocks.space,
           ),
         ),
@@ -1247,8 +1180,10 @@ void main() {
       await _setPhoneViewport(tester);
       addTearDown(() => _resetViewport(tester));
 
-      final store = _createSeededStore();
-      store.currentUser = store.users.firstWhere((u) => u.id == '1001');
+      final store = _createSeededStore(viewerId: '1002');
+      final approvedCount = store.spaces
+          .where((s) => s.status == SpaceStatus.approved)
+          .length;
       final mocks = _ControllerBundle(store);
 
       await tester.pumpWidget(
@@ -1274,7 +1209,7 @@ void main() {
       final homeContext = tester.element(find.byType(HomePage));
       await Navigator.of(homeContext).maybePop();
       await tester.pumpAndSettle();
-      expect(find.text('พบ 2 พื้นที่ที่ตรงกับเงื่อนไข'), findsOneWidget);
+      expect(find.text('พบ $approvedCount พื้นที่ที่ตรงกับเงื่อนไข'), findsOneWidget);
 
       await _tapWidget(tester, find.text('ดูรายละเอียดและจอง').first);
       expect(find.byType(ReservePage), findsOneWidget);
