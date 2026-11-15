@@ -10,9 +10,15 @@ import '../models/domain.dart';
 import 'common.dart';
 
 class SpaceForm extends StatefulWidget {
-  const SpaceForm({super.key, required this.store, this.space});
+  const SpaceForm({
+    super.key,
+    required this.store,
+    this.space,
+    this.spaceController,
+  });
   final AppStore store;
   final Space? space;
+  final SpaceController? spaceController;
   @override
   State<SpaceForm> createState() => _SpaceFormState();
 }
@@ -160,7 +166,7 @@ class _SpaceFormState extends State<SpaceForm> {
     final selectedImage = _attachedBytes != null ? '' : fields[7].text.trim();
     final saved = await perform(
       context,
-      () => SpaceController(widget.store).saveAsync(
+      () => (widget.spaceController ?? SpaceController(widget.store)).saveAsync(
         id: widget.space?.id,
         name: fields[0].text,
         category: fields[1].text,
@@ -301,6 +307,14 @@ class _SpaceFormState extends State<SpaceForm> {
                                   height: 220,
                                   width: double.infinity,
                                   fit: BoxFit.contain,
+                                  errorBuilder: (_, _, _) => Container(
+                                    height: 100,
+                                    alignment: Alignment.center,
+                                    child: Text(
+                                      'ไม่สามารถเปิดภาพได้',
+                                      style: theme.textTheme.bodySmall,
+                                    ),
+                                  ),
                                 ),
                               )
                             else if (_previewImageUrl case final previewUrl?)
@@ -405,9 +419,15 @@ class _SpaceFormState extends State<SpaceForm> {
 }
 
 class AvailabilityPage extends StatefulWidget {
-  const AvailabilityPage({super.key, required this.store, required this.space});
+  const AvailabilityPage({
+    super.key,
+    required this.store,
+    required this.space,
+    this.spaceController,
+  });
   final AppStore store;
   final Space space;
+  final SpaceController? spaceController;
   @override
   State<AvailabilityPage> createState() => _AvailabilityPageState();
 }
@@ -616,9 +636,9 @@ class _AvailabilityPageState extends State<AvailabilityPage> {
               onPressed: () async {
                 if (await perform(
                       context,
-                      () => SpaceController(
-                        widget.store,
-                      ).saveAvailabilityAsync(widget.space.id, draft),
+                      () => (widget.spaceController ??
+                              SpaceController(widget.store))
+                          .saveAvailabilityAsync(widget.space.id, draft),
                       'บันทึกเวลาว่างแล้ว',
                     ) &&
                     context.mounted) {

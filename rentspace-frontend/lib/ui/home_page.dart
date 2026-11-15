@@ -17,8 +17,19 @@ String _initial(String name) =>
     name.trim().isEmpty ? '?' : name.trim().substring(0, 1);
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key, required this.store});
+  const HomePage({
+    super.key,
+    required this.store,
+    this.authController,
+    this.spaceController,
+    this.bookingController,
+    this.paymentController,
+  });
   final AppStore store;
+  final AuthController? authController;
+  final SpaceController? spaceController;
+  final BookingController? bookingController;
+  final PaymentController? paymentController;
   @override
   State<HomePage> createState() => _HomePageState();
 }
@@ -26,6 +37,10 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   AppStore get store => widget.store;
   AppUser get user => store.currentUser!;
+  AuthController get _authCtrl => widget.authController ?? AuthController(store);
+  SpaceController get _spaceCtrl => widget.spaceController ?? SpaceController(store);
+  BookingController get _bookingCtrl => widget.bookingController ?? BookingController(store);
+  PaymentController get _paymentCtrl => widget.paymentController ?? PaymentController(store);
   final searchController = TextEditingController();
   final userSearchController = TextEditingController();
   int index = 0,
@@ -67,14 +82,21 @@ class _HomePageState extends State<HomePage> {
 
   void open(Widget page) =>
       Navigator.push(context, MaterialPageRoute(builder: (_) => page));
-  void bookingDetail(Booking b) =>
-      open(BookingPage(store: store, bookingId: b.id));
+  void bookingDetail(Booking b) => open(
+    BookingPage(
+      store: store,
+      bookingId: b.id,
+      bookingController: widget.bookingController,
+      paymentController: widget.paymentController,
+      spaceController: widget.spaceController,
+    ),
+  );
   Future<void> report(String subject) async {
     final detail = await askReason(context, 'รายงาน: $subject');
     if (detail != null && mounted) {
       perform(
         context,
-        () => SpaceController(store).reportAsync(subject, detail),
+        () => _spaceCtrl.reportAsync(subject, detail),
         'ส่งรายงานแล้ว',
       );
     }
@@ -124,21 +146,30 @@ class _HomePageState extends State<HomePage> {
         0 => browse(false),
         1 => bookingList(),
         2 => browse(true),
-        _ => ProfilePanel(store: store),
+        _ => ProfilePanel(
+          store: store,
+          authController: widget.authController,
+        ),
       },
       UserRole.owner => switch (index) {
         0 => dashboard(),
         1 => spaces(),
         2 => ownerReservations(),
         3 => payouts(),
-        _ => ProfilePanel(store: store),
+        _ => ProfilePanel(
+          store: store,
+          authController: widget.authController,
+        ),
       },
       UserRole.admin => switch (index) {
         0 => dashboard(),
         1 => moderation(),
         2 => finance(),
         3 => users(),
-        _ => ProfilePanel(store: store),
+        _ => ProfilePanel(
+          store: store,
+          authController: widget.authController,
+        ),
       },
     };
     final badges = store.navBadges();
@@ -157,7 +188,7 @@ class _HomePageState extends State<HomePage> {
                 user: user,
                 onHomeTap: () => select(0),
                 onProfileTap: () => select(labels.length - 1),
-                onLogout: () => AuthController(store).logoutAsync(),
+                onLogout: () => _authCtrl.logoutAsync(),
               ),
               if (store.syncError != null)
                 MaterialBanner(
@@ -331,7 +362,7 @@ class _HomePageState extends State<HomePage> {
           .where((s) => s.status == SpaceStatus.approved)
           .map((s) => s.category),
     };
-    final list = SpaceController(store).filterSpaces(
+    final list = _spaceCtrl.filterSpaces(
       favoritesOnly: favorites,
       category: category,
       query: query,
@@ -466,7 +497,15 @@ class _HomePageState extends State<HomePage> {
         for (final s in list)
           SurfaceCard(
             padding: EdgeInsets.zero,
-            onTap: () => open(ReservePage(store: store, space: s)),
+            onTap: () => open(
+              ReservePage(
+                store: store,
+                space: s,
+                bookingController: widget.bookingController,
+                spaceController: widget.spaceController,
+                authController: widget.authController,
+              ),
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -475,36 +514,18 @@ class _HomePageState extends State<HomePage> {
                     borderRadius: const BorderRadius.vertical(
                       top: Radius.circular(24),
                     ),
-                    child: s.imageBytes != null
-                        ? Image.memory(
-                            s.imageBytes!,
-                            height: 180,
-                            width: double.infinity,
-                            fit: BoxFit.cover,
-                          )
-                        : Image.network(
-                            s.image,
-                            height: 180,
-                            width: double.infinity,
-                            fit: BoxFit.cover,
-                            loadingBuilder: (context, child, loadingProgress) {
-                              if (loadingProgress == null) return child;
-                              return Container(
-                                height: 180,
-                                alignment: Alignment.center,
-                                color: scheme.surfaceContainerLow,
-                                child: const CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              );
-                            },
-                            errorBuilder: (_, _, _) => const SizedBox(
-                              height: 120,
-                              child: Center(
-                                child: Icon(Icons.home_work_outlined, size: 56),
-                              ),
-                            ),
-                          ),
+                    child: SpaceImage(
+                      s,
+                      height: 180,
+                      width: double.infinity,
+                      showLoading: true,
+                      fallback: const SizedBox(
+                        height: 120,
+                        child: Center(
+                          child: Icon(Icons.home_work_outlined, size: 56),
+                        ),
+                      ),
+                    ),
                   ),
                 Padding(
                   padding: const EdgeInsets.all(16),
@@ -523,7 +544,7 @@ class _HomePageState extends State<HomePage> {
                             tooltip: 'รายการโปรด',
                             onPressed: () => perform(
                               context,
-                              () => SpaceController(store).favoriteAsync(s.id),
+                              () => _spaceCtrl.favoriteAsync(s.id),
                             ),
                             icon: Icon(
                               user.favorites.contains(s.id)
@@ -569,10 +590,10 @@ class _HomePageState extends State<HomePage> {
                                   ),
                                 ),
                               ),
-                              if (SpaceController(store).averageRating(s.id)
+                              if (_spaceCtrl.averageRating(s.id)
                                   case final avg?)
                                 Text(
-                                  '★ ${avg.toStringAsFixed(1)} (${SpaceController(store).reviewCountFor(s.id)} รีวิว)',
+                                  '★ ${avg.toStringAsFixed(1)} (${_spaceCtrl.reviewCountFor(s.id)} รีวิว)',
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     color: toneColor(
                                       context,
@@ -607,8 +628,15 @@ class _HomePageState extends State<HomePage> {
                       Align(
                         alignment: Alignment.centerLeft,
                         child: FilledButton(
-                          onPressed: () =>
-                              open(ReservePage(store: store, space: s)),
+                          onPressed: () => open(
+                            ReservePage(
+                              store: store,
+                              space: s,
+                              bookingController: widget.bookingController,
+                              spaceController: widget.spaceController,
+                              authController: widget.authController,
+                            ),
+                          ),
                           child: const Text('ดูรายละเอียดและจอง'),
                         ),
                       ),
@@ -786,7 +814,7 @@ class _HomePageState extends State<HomePage> {
               if (r != null && mounted) {
                 perform(
                   context,
-                  () => PaymentController(store).reviewAsync(b.id, false, r),
+                  () => _paymentCtrl.reviewAsync(b.id, false, r),
                   'ปฏิเสธสลิปแล้ว',
                 );
               }
@@ -798,7 +826,7 @@ class _HomePageState extends State<HomePage> {
               Navigator.pop(ctx);
               perform(
                 context,
-                () => PaymentController(store).reviewAsync(b.id, true, ''),
+                () => _paymentCtrl.reviewAsync(b.id, true, ''),
                 'อนุมัติสลิปและยืนยันการจองเรียบร้อย',
               );
             },
@@ -810,7 +838,12 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _handleQuickPayout(Booking b) =>
-      showAdminPayoutDialog(context, store: store, booking: b);
+      showAdminPayoutDialog(
+        context,
+        store: store,
+        booking: b,
+        paymentController: widget.paymentController,
+      );
 
   Widget _adminFinanceCard(Booking b) {
     final theme = Theme.of(context);
@@ -1043,9 +1076,7 @@ class _HomePageState extends State<HomePage> {
                     child: FilledButton.icon(
                       onPressed: () => perform(
                         context,
-                        () => BookingController(
-                          store,
-                        ).ownerReviewAsync(b.id, true, ''),
+                        () => _bookingCtrl.ownerReviewAsync(b.id, true, ''),
                         'อนุมัติคำขอจองแล้ว',
                       ),
                       icon: const Icon(Icons.check, size: 16),
@@ -1063,9 +1094,7 @@ class _HomePageState extends State<HomePage> {
                         if (r != null && mounted) {
                           perform(
                             context,
-                            () => BookingController(
-                              store,
-                            ).ownerReviewAsync(b.id, false, r),
+                            () => _bookingCtrl.ownerReviewAsync(b.id, false, r),
                             'ปฏิเสธคำขอจองแล้ว',
                           );
                         }
@@ -1080,7 +1109,7 @@ class _HomePageState extends State<HomePage> {
                     child: FilledButton.icon(
                       onPressed: () => perform(
                         context,
-                        () => BookingController(store).completeAsync(b.id),
+                        () => _bookingCtrl.completeAsync(b.id),
                         'ทำเครื่องหมายว่าใช้บริการแล้ว',
                       ),
                       icon: const Icon(Icons.task_alt, size: 16),
@@ -1569,7 +1598,9 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
             FilledButton.icon(
-              onPressed: () => open(SpaceForm(store: store)),
+              onPressed: () => open(
+                SpaceForm(store: store, spaceController: widget.spaceController),
+              ),
               icon: const Icon(Icons.add, size: 18),
               label: const Text('เพิ่มพื้นที่'),
             ),
@@ -1589,10 +1620,8 @@ class _HomePageState extends State<HomePage> {
                         b.status == BookingStatus.completed,
                   )
                   .fold<int>(0, (sum, b) => sum + b.ownerNet);
-              final avgRating = SpaceController(store).averageRating(s.id);
-              final reviewCount = SpaceController(
-                store,
-              ).reviewCountFor(s.id);
+              final avgRating = _spaceCtrl.averageRating(s.id);
+              final reviewCount = _spaceCtrl.reviewCountFor(s.id);
 
               return SurfaceCard(
                 child: Column(
@@ -1651,13 +1680,23 @@ class _HomePageState extends State<HomePage> {
                       runSpacing: 8,
                       children: [
                         OutlinedButton(
-                          onPressed: () =>
-                              open(SpaceForm(store: store, space: s)),
+                          onPressed: () => open(
+                            SpaceForm(
+                              store: store,
+                              space: s,
+                              spaceController: widget.spaceController,
+                            ),
+                          ),
                           child: const Text('แก้ไข'),
                         ),
                         OutlinedButton(
-                          onPressed: () =>
-                              open(AvailabilityPage(store: store, space: s)),
+                          onPressed: () => open(
+                            AvailabilityPage(
+                              store: store,
+                              space: s,
+                              spaceController: widget.spaceController,
+                            ),
+                          ),
                           child: const Text('ตั้งเวลาว่าง / วันปิด'),
                         ),
                       ],
@@ -1969,21 +2008,14 @@ class _HomePageState extends State<HomePage> {
                     const SizedBox(height: 12),
                     ClipRRect(
                       borderRadius: BorderRadius.circular(8),
-                      child: s.imageBytes != null
-                          ? Image.memory(
-                              s.imageBytes!,
-                              height: 160,
-                              fit: BoxFit.cover,
-                            )
-                          : Image.network(
-                              s.image,
-                              height: 160,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, _, _) => Text(
-                                'เปิดภาพไม่ได้',
-                                style: theme.textTheme.bodySmall,
-                              ),
-                            ),
+                      child: SpaceImage(
+                        s,
+                        height: 160,
+                        fallback: Text(
+                          'เปิดภาพไม่ได้',
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ),
                     ),
                   ],
                   const SizedBox(height: 14),
@@ -1994,9 +2026,7 @@ class _HomePageState extends State<HomePage> {
                       FilledButton(
                         onPressed: () => perform(
                           context,
-                          () => SpaceController(
-                            store,
-                          ).reviewAsync(s.id, true, ''),
+                          () => _spaceCtrl.reviewAsync(s.id, true, ''),
                         ),
                         child: const Text('อนุมัติประกาศ'),
                       ),
@@ -2009,9 +2039,7 @@ class _HomePageState extends State<HomePage> {
                           if (r != null && mounted) {
                             perform(
                               context,
-                              () => SpaceController(
-                                store,
-                              ).reviewAsync(s.id, false, r),
+                              () => _spaceCtrl.reviewAsync(s.id, false, r),
                             );
                           }
                         },
@@ -2063,8 +2091,7 @@ class _HomePageState extends State<HomePage> {
                         if (r != null && mounted) {
                           perform(
                             context,
-                            () =>
-                                SpaceController(store).closeIssueAsync(i.id, r),
+                            () => _spaceCtrl.closeIssueAsync(i.id, r),
                           );
                         }
                       },
@@ -2167,9 +2194,7 @@ class _HomePageState extends State<HomePage> {
                             if (r != null && mounted) {
                               perform(
                                 context,
-                                () => SpaceController(
-                                  store,
-                                ).suspendSpaceAsync(s.id, r),
+                                () => _spaceCtrl.suspendSpaceAsync(s.id, r),
                               );
                             }
                           },
@@ -2181,7 +2206,7 @@ class _HomePageState extends State<HomePage> {
                           onPressed: () => perform(
                             context,
                             () =>
-                                SpaceController(store).activateSpaceAsync(s.id),
+                                _spaceCtrl.activateSpaceAsync(s.id),
                           ),
                           icon: const Icon(
                             Icons.check_circle_outline,
@@ -2193,9 +2218,7 @@ class _HomePageState extends State<HomePage> {
                         FilledButton(
                           onPressed: () => perform(
                             context,
-                            () => SpaceController(
-                              store,
-                            ).reviewAsync(s.id, true, ''),
+                            () => _spaceCtrl.reviewAsync(s.id, true, ''),
                           ),
                           child: const Text('อนุมัติประกาศ'),
                         ),
@@ -2208,9 +2231,7 @@ class _HomePageState extends State<HomePage> {
                             if (r != null && mounted) {
                               perform(
                                 context,
-                                () => SpaceController(
-                                  store,
-                                ).reviewAsync(s.id, false, r),
+                                () => _spaceCtrl.reviewAsync(s.id, false, r),
                               );
                             }
                           },
@@ -2449,9 +2470,10 @@ class _HomePageState extends State<HomePage> {
   Widget users() {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final filtered = AuthController(
-      store,
-    ).filterUsers(query: userQuery, role: userRoleFilter);
+    final filtered = _authCtrl.filterUsers(
+      query: userQuery,
+      role: userRoleFilter,
+    );
     return PageBody(
       children: [
         heading('จัดการผู้ใช้', 'เปิด/ปิดการใช้งานบัญชี และตรวจสอบสิทธิ์'),
@@ -2594,7 +2616,7 @@ class _HomePageState extends State<HomePage> {
                     value: u.active,
                     onChanged: (_) => perform(
                       context,
-                      () => AuthController(store).toggleUserAsync(u.id),
+                      () => _authCtrl.toggleUserAsync(u.id),
                     ),
                   ),
               ],
@@ -2703,8 +2725,9 @@ class _MobileTopBar extends StatelessWidget {
 }
 
 class ProfilePanel extends StatefulWidget {
-  const ProfilePanel({super.key, required this.store});
+  const ProfilePanel({super.key, required this.store, this.authController});
   final AppStore store;
+  final AuthController? authController;
   @override
   State<ProfilePanel> createState() => _ProfilePanelState();
 }
@@ -2768,7 +2791,8 @@ class _ProfilePanelState extends State<ProfilePanel> {
                 child: FilledButton(
                   onPressed: () => perform(
                     context,
-                    () => AuthController(widget.store).updateProfileAsync(
+                    () => (widget.authController ?? AuthController(widget.store))
+                        .updateProfileAsync(
                       name.text,
                       email.text,
                       phone.text,
@@ -2819,7 +2843,8 @@ class _ProfilePanelState extends State<ProfilePanel> {
                   onPressed: () async {
                     final ok = await perform(
                       context,
-                      () => AuthController(widget.store).changePasswordAsync(
+                      () => (widget.authController ?? AuthController(widget.store))
+                          .changePasswordAsync(
                         currentPassword.text,
                         newPassword.text,
                         confirmPassword.text,

@@ -6,8 +6,9 @@ import '../models/domain.dart';
 import 'common.dart';
 
 class LoginPage extends StatefulWidget {
-  const LoginPage({super.key, required this.store});
+  const LoginPage({super.key, required this.store, this.authController});
   final AppStore store;
+  final AuthController? authController;
   @override
   State<LoginPage> createState() => _LoginPageState();
 }
@@ -31,7 +32,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   void submit() => perform(context, () async {
-    final auth = AuthController(widget.store);
+    final auth = widget.authController ?? AuthController(widget.store);
     if (register) {
       await auth.registerAsync(
         name.text,

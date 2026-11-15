@@ -140,12 +140,14 @@ Future<void> showAdminPayoutDialog(
   required AppStore store,
   required Booking booking,
   SlipPickerFn? pickSlip,
+  PaymentController? paymentController,
 }) => showDialog<void>(
   context: context,
   builder: (_) => _AdminPayoutDialog(
     store: store,
     booking: booking,
     pickSlip: pickSlip ?? pickValidatedSlipImage,
+    paymentController: paymentController,
   ),
 );
 
@@ -154,10 +156,12 @@ class _AdminPayoutDialog extends StatefulWidget {
     required this.store,
     required this.booking,
     required this.pickSlip,
+    this.paymentController,
   });
   final AppStore store;
   final Booking booking;
   final SlipPickerFn pickSlip;
+  final PaymentController? paymentController;
 
   @override
   State<_AdminPayoutDialog> createState() => _AdminPayoutDialogState();
@@ -195,7 +199,8 @@ class _AdminPayoutDialogState extends State<_AdminPayoutDialog> {
     setState(() => busy = true);
     final succeeded = await perform(
       context,
-      () => PaymentController(widget.store).payoutAsync(
+      () => (widget.paymentController ?? PaymentController(widget.store))
+          .payoutAsync(
         widget.booking.id,
         fileName: slipName,
         bytes: slipBytes,
@@ -235,6 +240,7 @@ class _AdminPayoutDialogState extends State<_AdminPayoutDialog> {
                       slipBytes!,
                       height: 150,
                       fit: BoxFit.contain,
+                      errorBuilder: (_, _, _) => const Text('ไม่สามารถเปิดภาพได้'),
                     ),
                   ),
                   const SizedBox(height: 6),
@@ -376,9 +382,21 @@ class _AdminPayoutDialogState extends State<_AdminPayoutDialog> {
 }
 
 class BookingPage extends StatefulWidget {
-  const BookingPage({super.key, required this.store, required this.bookingId});
+  const BookingPage({
+    super.key,
+    required this.store,
+    required this.bookingId,
+    this.pickSlip,
+    this.bookingController,
+    this.paymentController,
+    this.spaceController,
+  });
   final AppStore store;
   final String bookingId;
+  final SlipPickerFn? pickSlip;
+  final BookingController? bookingController;
+  final PaymentController? paymentController;
+  final SpaceController? spaceController;
 
   @override
   State<BookingPage> createState() => _BookingPageState();
@@ -541,8 +559,8 @@ class _BookingPageState extends State<BookingPage> {
         );
       }
       final theme = Theme.of(context);
-      final booking = BookingController(widget.store),
-          payment = PaymentController(widget.store);
+      final booking = widget.bookingController ?? BookingController(widget.store),
+          payment = widget.paymentController ?? PaymentController(widget.store);
 
       return Scaffold(
         appBar: AppBar(
@@ -870,7 +888,12 @@ class _BookingPageState extends State<BookingPage> {
                         onPressed: () => Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => SlipPage(store: store, booking: b),
+                            builder: (_) => SlipPage(
+                              store: store,
+                              booking: b,
+                              pickSlip: widget.pickSlip,
+                              paymentController: widget.paymentController,
+                            ),
                           ),
                         ),
                         icon: const Icon(Icons.upload, size: 18),
@@ -1047,6 +1070,7 @@ class _BookingPageState extends State<BookingPage> {
                       context,
                       store: widget.store,
                       booking: b,
+                      paymentController: widget.paymentController,
                     ),
                     child: const Text('บันทึกจ่ายเจ้าของ (แนบสลิป)'),
                   ),
@@ -1139,7 +1163,11 @@ class _BookingPageState extends State<BookingPage> {
               )
             else if (u.role == UserRole.renter &&
                 b.status == BookingStatus.completed)
-              _ReviewFormCard(store: store, bookingId: b.id),
+              _ReviewFormCard(
+                store: store,
+                bookingId: b.id,
+                bookingController: widget.bookingController,
+              ),
             if (u.role == UserRole.admin &&
                 ![
                   BookingStatus.completed,
@@ -1164,7 +1192,8 @@ class _BookingPageState extends State<BookingPage> {
                   onPressed: () => reasonAction(
                     context,
                     'แจ้งปัญหา / ขอให้ Admin ช่วยเหลือ',
-                    (r) => SpaceController(store).reportAsync(b.id, r),
+                    (r) => (widget.spaceController ?? SpaceController(store))
+                        .reportAsync(b.id, r),
                   ),
                   child: const Text('แจ้งปัญหาการจอง'),
                 ),
@@ -1177,9 +1206,17 @@ class _BookingPageState extends State<BookingPage> {
 }
 
 class SlipPage extends StatefulWidget {
-  const SlipPage({super.key, required this.store, required this.booking});
+  const SlipPage({
+    super.key,
+    required this.store,
+    required this.booking,
+    this.pickSlip,
+    this.paymentController,
+  });
   final AppStore store;
   final Booking booking;
+  final SlipPickerFn? pickSlip;
+  final PaymentController? paymentController;
   @override
   State<SlipPage> createState() => _SlipPageState();
 }
@@ -1198,7 +1235,8 @@ class _SlipPageState extends State<SlipPage> {
   Future<void> choose() async {
     setState(() => busy = true);
     try {
-      final picked = await pickValidatedSlipImage(context);
+      final picker = widget.pickSlip ?? pickValidatedSlipImage;
+      final picked = await picker(context);
       if (picked != null && mounted) {
         setState(() {
           bytes = picked.bytes;
@@ -1244,6 +1282,7 @@ class _SlipPageState extends State<SlipPage> {
                             bytes!,
                             height: 260,
                             fit: BoxFit.contain,
+                            errorBuilder: (_, _, _) => const Text('ไม่สามารถเปิดภาพได้'),
                           ),
                         )
                       else ...[
@@ -1291,7 +1330,9 @@ class _SlipPageState extends State<SlipPage> {
                             setState(() => busy = true);
                             final ok = await perform(
                               context,
-                              () => PaymentController(widget.store).submitAsync(
+                              () => (widget.paymentController ??
+                                      PaymentController(widget.store))
+                                  .submitAsync(
                                 widget.booking.id,
                                 filename,
                                 bytes!,
@@ -1318,9 +1359,14 @@ class _SlipPageState extends State<SlipPage> {
 }
 
 class _ReviewFormCard extends StatefulWidget {
-  const _ReviewFormCard({required this.store, required this.bookingId});
+  const _ReviewFormCard({
+    required this.store,
+    required this.bookingId,
+    this.bookingController,
+  });
   final AppStore store;
   final String bookingId;
+  final BookingController? bookingController;
   @override
   State<_ReviewFormCard> createState() => _ReviewFormCardState();
 }
@@ -1370,9 +1416,8 @@ class _ReviewFormCardState extends State<_ReviewFormCard> {
             child: FilledButton.icon(
               onPressed: () => perform(
                 context,
-                () => BookingController(
-                  widget.store,
-                ).submitReviewAsync(widget.bookingId, rating, comment.text),
+                () => (widget.bookingController ?? BookingController(widget.store))
+                    .submitReviewAsync(widget.bookingId, rating, comment.text),
                 'บันทึกรีวิวเรียบร้อยแล้ว',
               ),
               icon: const Icon(Icons.rate_review_outlined, size: 18),

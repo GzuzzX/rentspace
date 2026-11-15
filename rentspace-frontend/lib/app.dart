@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'controllers/auth_controller.dart';
+import 'controllers/booking_controller.dart';
+import 'controllers/payment_controller.dart';
+import 'controllers/space_controller.dart';
 import 'data/app_store.dart';
 import 'ui/home_page.dart';
 import 'ui/login_page.dart';
@@ -11,8 +14,19 @@ const double kMobileMaxWidth = 430;
 const double kMobileMaxHeight = 932;
 
 class RentSpaceApp extends StatefulWidget {
-  RentSpaceApp({super.key, AppStore? store}) : store = store ?? AppStore();
+  RentSpaceApp({
+    super.key,
+    AppStore? store,
+    this.authController,
+    this.spaceController,
+    this.bookingController,
+    this.paymentController,
+  }) : store = store ?? AppStore();
   final AppStore store;
+  final AuthController? authController;
+  final SpaceController? spaceController;
+  final BookingController? bookingController;
+  final PaymentController? paymentController;
 
   @override
   State<RentSpaceApp> createState() => _RentSpaceAppState();
@@ -22,7 +36,8 @@ class _RentSpaceAppState extends State<RentSpaceApp> {
   bool _restoring = true;
   Future<void> _restore() async {
     try {
-      await AuthController(widget.store).restoreSessionAsync();
+      final auth = widget.authController ?? AuthController(widget.store);
+      await auth.restoreSessionAsync();
     } catch (e) {
       widget.store.syncError = e.toString();
     } finally {
@@ -59,10 +74,17 @@ class _RentSpaceAppState extends State<RentSpaceApp> {
       home: _restoring
           ? const Scaffold(body: Center(child: CircularProgressIndicator()))
           : widget.store.currentUser == null
-          ? LoginPage(store: widget.store)
+          ? LoginPage(
+              store: widget.store,
+              authController: widget.authController,
+            )
           : HomePage(
               key: ValueKey(widget.store.currentUser!.id),
               store: widget.store,
+              authController: widget.authController,
+              spaceController: widget.spaceController,
+              bookingController: widget.bookingController,
+              paymentController: widget.paymentController,
             ),
     ),
   );

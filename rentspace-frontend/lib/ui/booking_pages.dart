@@ -11,9 +11,19 @@ import 'common.dart';
 export 'booking_detail_page.dart';
 
 class ReservePage extends StatefulWidget {
-  const ReservePage({super.key, required this.store, required this.space});
+  const ReservePage({
+    super.key,
+    required this.store,
+    required this.space,
+    this.bookingController,
+    this.spaceController,
+    this.authController,
+  });
   final AppStore store;
   final Space space;
+  final BookingController? bookingController;
+  final SpaceController? spaceController;
+  final AuthController? authController;
   @override
   State<ReservePage> createState() => _ReservePageState();
 }
@@ -103,7 +113,9 @@ class _ReservePageState extends State<ReservePage> {
   Widget build(BuildContext context) {
     final s = widget.space;
     final theme = Theme.of(context);
-    final controller = BookingController(widget.store);
+    final controller =
+        widget.bookingController ?? BookingController(widget.store);
+    final spaceCtrl = widget.spaceController ?? SpaceController(widget.store);
     final dayHours = s.availability.days[date.weekday - 1];
     final endDate = date.add(Duration(days: days - 1));
     final busyLabels = controller.busySlotLabels(s.id, date);
@@ -137,23 +149,15 @@ class _ReservePageState extends State<ReservePage> {
           if (s.hasImage)
             ClipRRect(
               borderRadius: BorderRadius.circular(12),
-              child: s.imageBytes != null
-                  ? Image.memory(
-                      s.imageBytes!,
-                      height: 220,
-                      width: double.infinity,
-                      fit: BoxFit.cover,
-                    )
-                  : Image.network(
-                      s.image,
-                      height: 220,
-                      width: double.infinity,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) => const SizedBox(
-                        height: 120,
-                        child: Icon(Icons.home_work_outlined, size: 64),
-                      ),
-                    ),
+              child: SpaceImage(
+                s,
+                height: 220,
+                width: double.infinity,
+                fallback: const SizedBox(
+                  height: 120,
+                  child: Icon(Icons.home_work_outlined, size: 64),
+                ),
+              ),
             ),
           if (s.hasImage) const SizedBox(height: 12),
           SurfaceCard(
@@ -570,6 +574,9 @@ class _ReservePageState extends State<ReservePage> {
                             attendeesCount: attendees,
                             zoneName: zone,
                             renterNote: noteCtrl.text.trim(),
+                            authController: widget.authController,
+                            bookingController: widget.bookingController,
+                            spaceController: widget.spaceController,
                           ),
                         ),
                       );
@@ -585,9 +592,7 @@ class _ReservePageState extends State<ReservePage> {
                 if (detail != null && context.mounted) {
                   perform(
                     context,
-                    () => SpaceController(
-                      widget.store,
-                    ).reportAsync(s.name, detail),
+                    () => spaceCtrl.reportAsync(s.name, detail),
                     'ส่งรายงานแล้ว',
                   );
                 }
@@ -595,13 +600,13 @@ class _ReservePageState extends State<ReservePage> {
               child: const Text('รายงานปัญหาพื้นที่'),
             ),
           ),
-          if (SpaceController(widget.store).reviewsFor(s.id) case final reviews
+          if (spaceCtrl.reviewsFor(s.id) case final reviews
               when reviews.isNotEmpty) ...[
             const SizedBox(height: 8),
             SurfaceCard(
               title: 'รีวิวจากผู้เช่า (${reviews.length})',
               action: StatusBadge(
-                '★ ${SpaceController(widget.store).averageRating(s.id)!.toStringAsFixed(1)}',
+                '★ ${spaceCtrl.averageRating(s.id)!.toStringAsFixed(1)}',
                 tone: BadgeTone.warning,
               ),
               child: Column(
@@ -651,6 +656,9 @@ class BookingConfirmationPage extends StatefulWidget {
     this.attendeesCount = 1,
     this.zoneName = 'โซนหลัก (พื้นที่มาตรฐาน)',
     this.renterNote = '',
+    this.authController,
+    this.bookingController,
+    this.spaceController,
   });
 
   final AppStore store;
@@ -662,6 +670,9 @@ class BookingConfirmationPage extends StatefulWidget {
   final int attendeesCount;
   final String zoneName;
   final String renterNote;
+  final AuthController? authController;
+  final BookingController? bookingController;
+  final SpaceController? spaceController;
 
   @override
   State<BookingConfirmationPage> createState() =>
@@ -693,7 +704,9 @@ class _BookingConfirmationPageState extends State<BookingConfirmationPage> {
     Booking? created;
     final success = await perform(
       context,
-      () async => created = await BookingController(widget.store).createAsync(
+      () async => created = await (widget.bookingController ??
+              BookingController(widget.store))
+          .createAsync(
         space.id,
         date,
         start,
@@ -715,8 +728,12 @@ class _BookingConfirmationPageState extends State<BookingConfirmationPage> {
       Navigator.pushAndRemoveUntil(
         context,
         MaterialPageRoute(
-          builder: (_) =>
-              BookingPage(store: widget.store, bookingId: created!.id),
+          builder: (_) => BookingPage(
+            store: widget.store,
+            bookingId: created!.id,
+            bookingController: widget.bookingController,
+            spaceController: widget.spaceController,
+          ),
         ),
         (route) => route.isFirst,
       );
@@ -728,7 +745,11 @@ class _BookingConfirmationPageState extends State<BookingConfirmationPage> {
     if (user == null) return;
     final saved = await showDialog<bool>(
       context: context,
-      builder: (_) => _EditBookingContactDialog(store: widget.store, user: user),
+      builder: (_) => _EditBookingContactDialog(
+        store: widget.store,
+        user: user,
+        authController: widget.authController,
+      ),
     );
     if (saved == true && mounted) {
       setState(() {});
@@ -774,7 +795,8 @@ class _BookingConfirmationPageState extends State<BookingConfirmationPage> {
         children: [
           Builder(
             builder: (context) {
-              final controller = SpaceController(widget.store);
+              final controller =
+                  widget.spaceController ?? SpaceController(widget.store);
               return _PreBookingSpaceCard(
                 space: space,
                 averageRating: controller.averageRating(space.id),
@@ -893,28 +915,16 @@ class _PreBookingSpaceCard extends StatelessWidget {
                       color: scheme.surfaceContainerHigh,
                       child: const Icon(Icons.meeting_room_outlined, size: 32),
                     )
-                  : space.imageBytes != null
-                  ? Image.memory(space.imageBytes!, fit: BoxFit.cover)
-                  : Image.network(
-                      space.image,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) => Container(
+                  : SpaceImage(
+                      space,
+                      showLoading: true,
+                      fallback: Container(
                         color: scheme.surfaceContainerHigh,
                         child: const Icon(
                           Icons.broken_image_outlined,
                           size: 28,
                         ),
                       ),
-                      loadingBuilder: (ctx, child, progress) {
-                        if (progress == null) return child;
-                        return const Center(
-                          child: SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        );
-                      },
                     ),
             ),
           ),
@@ -1199,9 +1209,14 @@ class _PreBookingRenterCard extends StatelessWidget {
 }
 
 class _EditBookingContactDialog extends StatefulWidget {
-  const _EditBookingContactDialog({required this.store, required this.user});
+  const _EditBookingContactDialog({
+    required this.store,
+    required this.user,
+    this.authController,
+  });
   final AppStore store;
   final AppUser user;
+  final AuthController? authController;
 
   @override
   State<_EditBookingContactDialog> createState() =>
@@ -1227,7 +1242,8 @@ class _EditBookingContactDialogState extends State<_EditBookingContactDialog> {
   Future<void> _save() async {
     final saved = await perform(
       context,
-      () => AuthController(widget.store).updateProfileAsync(
+      () => (widget.authController ?? AuthController(widget.store))
+          .updateProfileAsync(
         nameCtrl.text,
         emailCtrl.text,
         phoneCtrl.text,

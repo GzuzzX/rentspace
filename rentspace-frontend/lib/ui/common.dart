@@ -703,3 +703,61 @@ class SlipImage extends StatelessWidget {
     return err;
   }
 }
+
+class SpaceImage extends StatelessWidget {
+  const SpaceImage(
+    this.space, {
+    super.key,
+    this.height,
+    this.width,
+    this.fit = BoxFit.cover,
+    this.fallback,
+    this.showLoading = false,
+  });
+  final Space space;
+  final double? height, width;
+  final BoxFit fit;
+  final Widget? fallback;
+  final bool showLoading;
+
+  @override
+  Widget build(BuildContext context) {
+    final err = fallback ?? const Text('ไม่สามารถเปิดภาพได้');
+    final bytes = space.imageBytes;
+    if (bytes != null && bytes.isNotEmpty) {
+      return Image.memory(
+        bytes,
+        height: height,
+        width: width,
+        fit: fit,
+        errorBuilder: (_, _, _) => err,
+      );
+    }
+    if (space.image.isNotEmpty) {
+      return Image.network(
+        space.image,
+        height: height,
+        width: width,
+        fit: fit,
+        loadingBuilder: !showLoading
+            ? null
+            : (_, child, progress) {
+                if (progress == null) return child;
+                return SizedBox(
+                  height: height,
+                  width: width,
+                  child: const Center(
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ),
+                );
+              },
+        errorBuilder: (_, _, _) => err,
+      );
+    }
+    return err;
+  }
+}
