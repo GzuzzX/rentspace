@@ -170,6 +170,80 @@ async function loadAmenityMap(db) {
   return map;
 }
 
+function mapSlipsAndReviews(paymentRows, reviewRows, bookingById) {
+  const mappedSlips = paymentRows.map((paymentRow) => ({
+    id: String(paymentRow.payment_id),
+    booking_id: String(paymentRow.booking_id),
+    file_name: paymentRow.file_name || "slip.jpg",
+    image_data: paymentRow.image_data || "",
+    image_url: normalizeImageUrl(paymentRow.slip_image_url),
+    submitted_at: toIsoDateTime(paymentRow.paid_at || paymentRow.created_at) || new Date().toISOString(),
+    note: paymentRow.note || paymentRow.transaction_ref || "",
+    rejection_reason: paymentRow.rejection_reason || "",
+  }));
+
+  const mappedReviews = reviewRows.map((reviewRow) => {
+    const relatedBooking = bookingById.get(String(reviewRow.booking_id));
+    return {
+      id: String(reviewRow.review_id),
+      booking_id: String(reviewRow.booking_id),
+      space_id: relatedBooking ? relatedBooking.space_id : "2001",
+      rating: Number(reviewRow.rating),
+      comment: reviewRow.review_comment || "",
+      created_at: toIsoDateTime(reviewRow.created_at) || new Date().toISOString(),
+    };
+  });
+  return { mappedSlips, mappedReviews };
+}
+
+function collectPairedPhoneIds(viewerId, visibleBookings) {
+  const pairedIds = new Set([viewerId]);
+  for (const bookingRecord of visibleBookings) {
+    pairedIds.add(bookingRecord.renter_id);
+    pairedIds.add(bookingRecord.owner_id);
+  }
+  return pairedIds;
+}
+
+function redactUsersForViewer(users, viewerId, isAdmin, visibleBookings) {
+  if (isAdmin) return users;
+  const pairedPhoneIds = collectPairedPhoneIds(viewerId, visibleBookings);
+  return users.map((userRecord) => {
+    const isSelf = userRecord.id === viewerId;
+    return {
+      ...userRecord,
+      email: isSelf ? userRecord.email : "",
+      bank_info: isSelf ? userRecord.bank_info : "",
+      phone: isSelf || pairedPhoneIds.has(userRecord.id) ? userRecord.phone : "",
+    };
+  });
+}
+
+function mapVisibleIssues(issueRows, viewerId, isAdmin) {
+  return issueRows
+    .filter((issueRow) => isAdmin || String(issueRow.reporter_id) === viewerId)
+    .map((issueRow) => ({
+      id: String(issueRow.id || issueRow.issue_id),
+      reporter_id: String(issueRow.reporter_id),
+      subject: issueRow.subject,
+      detail: issueRow.detail,
+      closed: Boolean(issueRow.closed),
+      resolution: issueRow.resolution || "",
+    }));
+}
+
+function buildBusySlots(bookings) {
+  return bookings
+    .filter((bookingRecord) => bookingRecord.status !== "ownerRejected" && bookingRecord.status !== "canceled")
+    .map((bookingRecord) => ({
+      space_id: bookingRecord.space_id,
+      booking_date: bookingRecord.booking_date,
+      start_minutes: bookingRecord.start_minutes,
+      end_minutes: bookingRecord.end_minutes,
+      days_count: bookingRecord.days_count,
+    }));
+}
+
 async function buildSnapshot(db, currentUserId) {
   const [userRows] = await db.query("SELECT * FROM users ORDER BY user_id ASC");
   const [spaceRows] = await db.query("SELECT * FROM spaces ORDER BY space_id ASC");
@@ -182,73 +256,47 @@ async function buildSnapshot(db, currentUserId) {
   const [logRows] = await db.query("SELECT * FROM admin_logs ORDER BY log_id DESC LIMIT 200");
   const amenityMap = await loadAmenityMap(db);
 
+  const viewerId = String(currentUserId);
   const users = userRows.map(mapUserRow);
-  const spaces = spaceRows.map((r) => mapSpaceRow(r, amenityMap));
-  const spaceById = new Map(spaces.map((s) => [s.id, s]));
-  const bookings = bookingRows.map((b) => mapBookingRow(b, spaceById));
-  const bookingById = new Map(bookings.map((b) => [b.id, b]));
+  const viewer = users.find((candidate) => candidate.id === viewerId);
+  const isAdmin = Boolean(viewer && viewer.role === "admin");
 
-  const slips = paymentRows.map((p) => ({
-    id: String(p.payment_id),
-    booking_id: String(p.booking_id),
-    file_name: p.file_name || "slip.jpg",
-    image_data: p.image_data || "",
-    image_url: normalizeImageUrl(p.slip_image_url),
-    submitted_at: toIsoDateTime(p.paid_at || p.created_at) || new Date().toISOString(),
-    note: p.note || p.transaction_ref || "",
-    rejection_reason: p.rejection_reason || "",
-  }));
+  const spaces = spaceRows.map((spaceRow) => mapSpaceRow(spaceRow, amenityMap));
+  const spaceById = new Map(spaces.map((spaceRecord) => [spaceRecord.id, spaceRecord]));
+  const bookings = bookingRows.map((bookingRow) => mapBookingRow(bookingRow, spaceById));
+  const bookingById = new Map(bookings.map((bookingRecord) => [bookingRecord.id, bookingRecord]));
+  const { mappedSlips, mappedReviews } = mapSlipsAndReviews(paymentRows, reviewRows, bookingById);
 
-  const reviews = reviewRows.map((r) => {
-    const relatedBooking = bookingById.get(String(r.booking_id));
-    return {
-      id: String(r.review_id),
-      booking_id: String(r.booking_id),
-      space_id: relatedBooking ? relatedBooking.space_id : "2001",
-      rating: Number(r.rating),
-      comment: r.review_comment || "",
-      created_at: toIsoDateTime(r.created_at) || new Date().toISOString(),
-    };
-  });
-
-  const busy = bookings
-    .filter((b) => b.status !== "ownerRejected" && b.status !== "canceled")
-    .map((b) => ({
-      space_id: b.space_id,
-      booking_date: b.booking_date,
-      start_minutes: b.start_minutes,
-      end_minutes: b.end_minutes,
-      days_count: b.days_count,
-    }));
+  const visibleBookings = isAdmin
+    ? bookings
+    : bookings.filter((bookingRecord) => bookingRecord.renter_id === viewerId || bookingRecord.owner_id === viewerId);
+  const visibleBookingIds = new Set(visibleBookings.map((bookingRecord) => bookingRecord.id));
+  const slips = isAdmin ? mappedSlips : mappedSlips.filter((slip) => visibleBookingIds.has(slip.booking_id));
 
   return {
-    userId: String(currentUserId),
-    users,
-    favorites: favRows.map((f) => String(f.space_id)),
+    userId: viewerId,
+    users: redactUsersForViewer(users, viewerId, isAdmin, visibleBookings),
+    favorites: favRows.map((favoriteRow) => String(favoriteRow.space_id)),
     spaces,
     blocks: blockRows.map(mapBlockRow),
-    bookings,
+    bookings: visibleBookings,
     slips,
-    reviews,
-    issues: issueRows.map((i) => ({
-      id: String(i.id || i.issue_id),
-      reporter_id: String(i.reporter_id),
-      subject: i.subject,
-      detail: i.detail,
-      closed: Boolean(i.closed),
-      resolution: i.resolution || "",
-    })),
-    busy,
-    logs: logRows.map((l) => ({
-      acted_at: toIsoDateTime(l.created_at) || new Date().toISOString(),
-      actor: l.admin_name || "System",
-      action: `${l.action}: ${l.details}`,
-    })),
+    reviews: mappedReviews,
+    issues: mapVisibleIssues(issueRows, viewerId, isAdmin),
+    busy: buildBusySlots(bookings),
+    logs: isAdmin
+      ? logRows.map((logEntry) => ({
+          acted_at: toIsoDateTime(logEntry.created_at) || new Date().toISOString(),
+          actor: logEntry.admin_name || "System",
+          action: `${logEntry.action}: ${logEntry.details}`,
+        }))
+      : [],
   };
 }
 
 module.exports = {
   toIsoDate,
   toIsoDateTime,
+  deriveBookingAppStatus,
   buildSnapshot,
 };

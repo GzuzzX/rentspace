@@ -14,6 +14,11 @@ const {
 } = require("./auth_security");
 const { DEFAULT_WEEK_HOURS, ensureSchema } = require("./schema_bootstrap");
 const { toIsoDate, buildSnapshot } = require("./snapshot_builder");
+const {
+  createBookingTransactional,
+  guardSpaceAccess,
+  guardBookingAccess,
+} = require("./booking_guards");
 
 const app = express();
 const db = con.promise();
@@ -63,7 +68,7 @@ async function recordAdminLog(actorId, actorName, action, targetType, targetId, 
   );
 }
 
-//=================== 1. Health, Password & State Routes =======================
+//=================== 1. Health & State Routes =================================
 
 app.get("/api/health", async (_req, res) => {
   try {
@@ -72,10 +77,6 @@ app.get("/api/health", async (_req, res) => {
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
-});
-
-app.get("/api/password/:raw", (req, res) => {
-  return res.send(hashPassword(req.params.raw));
 });
 
 app.get("/api/state", verifyToken(), async (req, res) => {
@@ -230,7 +231,11 @@ app.put("/api/auth/profile", verifyToken(), async (req, res) => {
 
 app.put("/api/auth/password", verifyToken(), async (req, res) => {
   try {
-    const { currentPassword, newPassword } = req.body;
+    const currentPassword = typeof req.body?.currentPassword === "string" ? req.body.currentPassword : "";
+    const newPassword = typeof req.body?.newPassword === "string" ? req.body.newPassword : "";
+    if (newPassword.length < 8) {
+      return res.status(400).json({ error: "รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร" });
+    }
     const [rows] = await db.query("SELECT * FROM users WHERE user_id = ?", [req.user.id]);
     if (rows.length === 0 || !verifyPassword(rows[0].password_hash, currentPassword)) {
       return res.status(400).json({ error: "รหัสผ่านปัจจุบันไม่ถูกต้อง" });
@@ -311,7 +316,25 @@ app.post("/api/spaces", verifyToken(["owner", "admin"]), async (req, res) => {
   }
 });
 
-app.put("/api/spaces/:id", verifyToken(["owner", "admin"]), async (req, res) => {
+function parseAvailabilityBlocks(rawBlocks) {
+  if (!Array.isArray(rawBlocks)) return [];
+  return rawBlocks.map((block) => {
+    const startDt = new Date(block.start);
+    const endDt = new Date(block.end);
+    if (Number.isNaN(startDt.getTime()) || Number.isNaN(endDt.getTime()) || endDt <= startDt) {
+      return null;
+    }
+    return {
+      startDt,
+      endDt,
+      startDateStr: toIsoDate(startDt),
+      endDateStr: toIsoDate(new Date(endDt.getTime() + 86400000)),
+      reason: block.reason || "ปิดห้อง",
+    };
+  });
+}
+
+app.put("/api/spaces/:id", verifyToken(["owner", "admin"]), guardSpaceAccess(db), async (req, res) => {
   try {
     const spaceId = req.params.id;
     const title = String(req.body.name || req.body.title || "").trim();
@@ -338,32 +361,43 @@ app.put("/api/spaces/:id", verifyToken(["owner", "admin"]), async (req, res) => 
   }
 });
 
-app.put("/api/spaces/:id/availability", verifyToken(["owner", "admin"]), async (req, res) => {
-  try {
-    const spaceId = req.params.id;
-    const days = Array.isArray(req.body.days) ? req.body.days : JSON.parse(DEFAULT_WEEK_HOURS);
-    const blocks = Array.isArray(req.body.blocks) ? req.body.blocks : [];
+app.put(
+  "/api/spaces/:id/availability",
+  verifyToken(["owner", "admin"]),
+  guardSpaceAccess(db),
+  async (req, res) => {
+    try {
+      const spaceId = req.params.id;
+      const days = Array.isArray(req.body.days) ? req.body.days : JSON.parse(DEFAULT_WEEK_HOURS);
+      const parsedBlocks = parseAvailabilityBlocks(req.body.blocks);
+      if (parsedBlocks.includes(null)) {
+        return res.status(400).json({ error: "ช่วงเวลาปิดห้องไม่ถูกต้อง" });
+      }
 
-    await db.query("UPDATE spaces SET hours_json = ? WHERE space_id = ?", [JSON.stringify(days), spaceId]);
-    await db.query("DELETE FROM room_blocks WHERE space_id = ?", [spaceId]);
+      await db.query("UPDATE spaces SET hours_json = ? WHERE space_id = ?", [JSON.stringify(days), spaceId]);
+      await db.query("DELETE FROM room_blocks WHERE space_id = ?", [spaceId]);
 
-    for (const block of blocks) {
-      const startDt = new Date(block.start);
-      const endDt = new Date(block.end);
-      const startDateStr = toIsoDate(startDt);
-      const endDateObj = new Date(endDt.getTime() + 86400000);
-      const endDateStr = toIsoDate(endDateObj);
-      await db.query(
-        `INSERT INTO room_blocks (space_id, created_by, start_date, end_date, start_at, end_at, reason)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [spaceId, req.user.id, startDateStr, endDateStr, startDt, endDt, block.reason || "ปิดห้อง"]
-      );
+      for (const parsedBlock of parsedBlocks) {
+        await db.query(
+          `INSERT INTO room_blocks (space_id, created_by, start_date, end_date, start_at, end_at, reason)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            spaceId,
+            req.user.id,
+            parsedBlock.startDateStr,
+            parsedBlock.endDateStr,
+            parsedBlock.startDt,
+            parsedBlock.endDt,
+            parsedBlock.reason,
+          ]
+        );
+      }
+      return res.json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
     }
-    return res.json({ ok: true });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
   }
-});
+);
 
 app.post("/api/spaces/:id/favorite", verifyToken(), async (req, res) => {
   try {
@@ -421,205 +455,199 @@ app.get("/api/bookings", verifyToken(), async (req, res) => {
   }
 });
 
-app.post("/api/bookings", verifyToken(), async (req, res) => {
+app.post("/api/bookings", verifyToken("renter"), async (req, res) => {
   try {
-    const spaceId = req.body.spaceId || req.body.space_id;
-    const startDate = String(req.body.date || req.body.start_date || "").substring(0, 10);
-    const days = Math.max(1, Number(req.body.days || 1));
-    const startMinutes = req.body.startMinutes != null ? Number(req.body.startMinutes) : 540;
-    const endMinutes = req.body.endMinutes != null ? Number(req.body.endMinutes) : 660;
-    const attendees = Math.max(1, Number(req.body.attendees || 1));
-    const zone = String(req.body.zone || "โซนหลัก (พื้นที่มาตรฐาน)").trim();
-    const renterNote = String(req.body.renterNote || "").trim();
+    const bookingOutcome = await createBookingTransactional(db, req.user.id, req.body);
+    return res.status(bookingOutcome.status).json(bookingOutcome.body);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
 
-    const [spaceRows] = await db.query("SELECT * FROM spaces WHERE space_id = ?", [spaceId]);
-    if (spaceRows.length === 0) {
-      return res.status(404).json({ error: "ไม่พบพื้นที่" });
+app.post(
+  "/api/bookings/:id/approve",
+  verifyToken(["owner", "admin"]),
+  guardBookingAccess(db, { access: "ownerOrAdmin", allowedStatuses: ["ownerReview"] }),
+  async (req, res) => {
+    try {
+      await db.query(
+        "UPDATE bookings SET status = 'approved', app_status = 'paymentDue', approved_at = NOW(), reason = ?, reason_kind = 'none' WHERE booking_id = ?",
+        [String(req.body.reason || "").trim(), req.params.id]
+      );
+      return res.json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
     }
-    const space = spaceRows[0];
-    const hours = Math.max(1, Math.ceil((endMinutes - startMinutes) / 60));
-    const totalPrice = Math.round(Number(space.price_per_day || 350)) * hours * days;
-    const platformFee = Math.round(totalPrice * 0.05);
-
-    const endDateObj = new Date(`${startDate}T00:00:00`);
-    endDateObj.setDate(endDateObj.getDate() + (days - 1));
-    const endDate = req.body.end_date || toIsoDate(endDateObj);
-
-    const startTimeStr = `${startDate} ${String(Math.floor(startMinutes / 60)).padStart(2, "0")}:${String(
-      startMinutes % 60
-    ).padStart(2, "0")}:00`;
-    const endTimeStr = `${endDate} ${String(Math.floor(endMinutes / 60)).padStart(2, "0")}:${String(
-      endMinutes % 60
-    ).padStart(2, "0")}:00`;
-
-    const [ins] = await db.query(
-      `INSERT INTO bookings (space_id, customer_id, start_date, end_date, start_time, end_time, total_price, status, is_paid, start_minutes, end_minutes, days_count, attendees, zone, renter_note, platform_fee, app_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?, ?, 'ownerReview')`,
-      [
-        spaceId,
-        req.user.id,
-        startDate,
-        endDate,
-        startTimeStr,
-        endTimeStr,
-        totalPrice,
-        startMinutes,
-        endMinutes,
-        days,
-        attendees,
-        zone,
-        renterNote,
-        platformFee,
-      ]
-    );
-    return res.status(201).json({ id: String(ins.insertId), booking_id: ins.insertId });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
   }
-});
+);
 
-app.post("/api/bookings/:id/approve", verifyToken(["owner", "admin"]), async (req, res) => {
-  try {
-    await db.query(
-      "UPDATE bookings SET status = 'approved', app_status = 'paymentDue', approved_at = NOW(), reason = ?, reason_kind = 'none' WHERE booking_id = ?",
-      [String(req.body.reason || "").trim(), req.params.id]
-    );
-    return res.json({ ok: true });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
+app.post(
+  "/api/bookings/:id/reject",
+  verifyToken(["owner", "admin"]),
+  guardBookingAccess(db, { access: "ownerOrAdmin", allowedStatuses: ["ownerReview"] }),
+  async (req, res) => {
+    try {
+      const reason = String(req.body.reason || "").trim();
+      await db.query(
+        "UPDATE bookings SET status = 'rejected', app_status = 'ownerRejected', reason = ?, reason_kind = 'ownerRejected' WHERE booking_id = ?",
+        [reason, req.params.id]
+      );
+      return res.json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
   }
-});
+);
 
-app.post("/api/bookings/:id/reject", verifyToken(["owner", "admin"]), async (req, res) => {
-  try {
-    const reason = String(req.body.reason || "").trim();
-    await db.query(
-      "UPDATE bookings SET status = 'rejected', app_status = 'ownerRejected', reason = ?, reason_kind = 'ownerRejected' WHERE booking_id = ?",
-      [reason, req.params.id]
-    );
-    return res.json({ ok: true });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
+app.post(
+  "/api/bookings/:id/cancel",
+  verifyToken(),
+  guardBookingAccess(db, {
+    access: "participantOrAdmin",
+    allowedStatuses: ["ownerReview", "paymentDue", "slipRejected"],
+    adminStatuses: ["ownerReview", "paymentDue", "slipReview", "slipRejected", "confirmed"],
+  }),
+  async (req, res) => {
+    try {
+      const reason = String(req.body.reason || "").trim();
+      await db.query(
+        "UPDATE bookings SET status = 'cancelled', app_status = 'canceled', reason = ?, reason_kind = 'canceledByUser' WHERE booking_id = ?",
+        [reason, req.params.id]
+      );
+      return res.json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
   }
-});
+);
 
-app.post("/api/bookings/:id/cancel", verifyToken(), async (req, res) => {
-  try {
-    const reason = String(req.body.reason || "").trim();
-    await db.query(
-      "UPDATE bookings SET status = 'cancelled', app_status = 'canceled', reason = ?, reason_kind = 'canceledByUser' WHERE booking_id = ?",
-      [reason, req.params.id]
-    );
-    return res.json({ ok: true });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
+app.post(
+  "/api/bookings/:id/complete",
+  verifyToken(),
+  guardBookingAccess(db, { access: "participantOrAdmin", allowedStatuses: ["confirmed"] }),
+  async (req, res) => {
+    try {
+      await db.query(
+        "UPDATE bookings SET status = 'completed', app_status = 'completed', completed_at = NOW() WHERE booking_id = ?",
+        [req.params.id]
+      );
+      return res.json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
   }
-});
+);
 
-app.post("/api/bookings/:id/complete", verifyToken(), async (req, res) => {
-  try {
-    await db.query(
-      "UPDATE bookings SET status = 'completed', app_status = 'completed', completed_at = NOW() WHERE booking_id = ?",
-      [req.params.id]
-    );
-    return res.json({ ok: true });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
+app.post(
+  "/api/bookings/:id/review",
+  verifyToken("renter"),
+  guardBookingAccess(db, { access: "renter", allowedStatuses: ["completed"] }),
+  async (req, res) => {
+    try {
+      const bookingId = req.params.id;
+      const rating = Math.min(5, Math.max(1, Number(req.body.rating || 5)));
+      const comment = String(req.body.comment || req.body.review_comment || "").trim();
+
+      await db.query("UPDATE bookings SET rating = ?, review_comment = ? WHERE booking_id = ?", [
+        rating,
+        comment,
+        bookingId,
+      ]);
+      await db.query(
+        `INSERT INTO reviews (booking_id, rating, review_comment)
+         VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE rating = VALUES(rating), review_comment = VALUES(review_comment)`,
+        [bookingId, rating, comment]
+      );
+      return res.status(201).json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
   }
-});
-
-app.post("/api/bookings/:id/review", verifyToken(), async (req, res) => {
-  try {
-    const bookingId = req.params.id;
-    const rating = Math.min(5, Math.max(1, Number(req.body.rating || 5)));
-    const comment = String(req.body.comment || req.body.review_comment || "").trim();
-
-    await db.query("UPDATE bookings SET rating = ?, review_comment = ? WHERE booking_id = ?", [
-      rating,
-      comment,
-      bookingId,
-    ]);
-    await db.query(
-      `INSERT INTO reviews (booking_id, rating, review_comment)
-       VALUES (?, ?, ?)
-       ON DUPLICATE KEY UPDATE rating = VALUES(rating), review_comment = VALUES(review_comment)`,
-      [bookingId, rating, comment]
-    );
-    return res.status(201).json({ ok: true });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
+);
 
 //=================== 5. Payments Routes =======================================
 
-app.post("/api/payments/:id/slip", verifyToken(), upload.single("file"), async (req, res) => {
-  try {
-    const bookingId = req.params.id;
-    const note = String(req.body.note || "").trim();
-    const file = req.file;
-    if (!file) {
-      return res.status(400).json({ error: "กรุณาแนบไฟล์สลิป" });
-    }
-    const ext = path.extname(file.originalname || ".jpg") || ".jpg";
-    const storedName = `slip_${bookingId}_${Date.now()}${ext}`;
-    fs.writeFileSync(path.join(uploadsDir, storedName), file.buffer);
+app.post(
+  "/api/payments/:id/slip",
+  verifyToken("renter"),
+  guardBookingAccess(db, { access: "renter", allowedStatuses: ["paymentDue", "slipRejected"] }),
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const bookingId = req.params.id;
+      const note = String(req.body.note || "").trim();
+      const file = req.file;
+      if (!file) {
+        return res.status(400).json({ error: "กรุณาแนบไฟล์สลิป" });
+      }
+      const ext = resolveValidatedSlipExtension(file);
+      if (!ext) {
+        return res.status(400).json({ error: "รองรับภาพ JPG และ PNG เท่านั้น" });
+      }
+      const storedName = `slip_${bookingId}_${Date.now()}${ext}`;
+      fs.writeFileSync(path.join(uploadsDir, storedName), file.buffer);
 
-    const imageUrl = `/uploads/${storedName}`;
-    const base64Data = file.buffer.toString("base64");
-    const [bRows] = await db.query("SELECT total_price FROM bookings WHERE booking_id = ?", [bookingId]);
-    const amount = bRows.length > 0 && bRows[0].total_price ? bRows[0].total_price : 500;
+      const imageUrl = `/uploads/${storedName}`;
+      const base64Data = file.buffer.toString("base64");
+      const amount = req.bookingRecord?.total_price ? req.bookingRecord.total_price : 500;
 
-    await db.query(
-      `INSERT INTO payments (booking_id, amount, payment_method, status, transaction_ref, slip_image_url, paid_at, file_name, note, image_data)
-       VALUES (?, ?, 'bank_transfer', 'submitted', ?, ?, NOW(), ?, ?, ?)`,
-      [bookingId, amount, `SLIP-${bookingId}`, imageUrl, file.originalname || storedName, note, base64Data]
-    );
-    await db.query("UPDATE bookings SET app_status = 'slipReview', slip_image_url = ? WHERE booking_id = ?", [
-      imageUrl,
-      bookingId,
-    ]);
-    return res.status(201).json({ ok: true, image_url: imageUrl });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-app.post("/api/payments/:id/review", verifyToken(["owner", "admin"]), async (req, res) => {
-  try {
-    const bookingId = req.params.id;
-    const approve = Boolean(req.body.approve);
-    const reason = String(req.body.reason || "").trim();
-
-    if (approve) {
       await db.query(
-        "UPDATE bookings SET status = 'confirmed', app_status = 'confirmed', is_paid = 1, confirmed_at = NOW(), reason = '', reason_kind = 'none' WHERE booking_id = ?",
-        [bookingId]
+        `INSERT INTO payments (booking_id, amount, payment_method, status, transaction_ref, slip_image_url, paid_at, file_name, note, image_data)
+         VALUES (?, ?, 'bank_transfer', 'submitted', ?, ?, NOW(), ?, ?, ?)`,
+        [bookingId, amount, `SLIP-${bookingId}`, imageUrl, path.basename(file.originalname || storedName), note, base64Data]
       );
-      await db.query("UPDATE payments SET status = 'verified' WHERE booking_id = ?", [bookingId]);
-    } else {
-      await db.query(
-        "UPDATE bookings SET app_status = 'slipRejected', slip_rejected_at = NOW(), reason = ?, reason_kind = 'slipRejected' WHERE booking_id = ?",
-        [reason, bookingId]
-      );
-      await db.query("UPDATE payments SET status = 'rejected', rejection_reason = ? WHERE booking_id = ?", [
-        reason,
+      await db.query("UPDATE bookings SET app_status = 'slipReview', slip_image_url = ? WHERE booking_id = ?", [
+        imageUrl,
         bookingId,
       ]);
+      return res.status(201).json({ ok: true, image_url: imageUrl });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
     }
-    await recordAdminLog(
-      req.user.id,
-      req.user.username,
-      "REVIEW_PAYMENT",
-      "booking",
-      bookingId,
-      approve ? "อนุมัติสลิป" : `ปฏิเสธสลิป: ${reason}`
-    );
-    return res.json({ ok: true });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
   }
-});
+);
+
+app.post(
+  "/api/payments/:id/review",
+  verifyToken(["owner", "admin"]),
+  guardBookingAccess(db, { access: "ownerOrAdmin", allowedStatuses: ["slipReview"] }),
+  async (req, res) => {
+    try {
+      const bookingId = req.params.id;
+      const approve = Boolean(req.body.approve);
+      const reason = String(req.body.reason || "").trim();
+
+      if (approve) {
+        await db.query(
+          "UPDATE bookings SET status = 'confirmed', app_status = 'confirmed', is_paid = 1, confirmed_at = NOW(), reason = '', reason_kind = 'none' WHERE booking_id = ?",
+          [bookingId]
+        );
+        await db.query("UPDATE payments SET status = 'verified' WHERE booking_id = ?", [bookingId]);
+      } else {
+        await db.query(
+          "UPDATE bookings SET app_status = 'slipRejected', slip_rejected_at = NOW(), reason = ?, reason_kind = 'slipRejected' WHERE booking_id = ?",
+          [reason, bookingId]
+        );
+        await db.query("UPDATE payments SET status = 'rejected', rejection_reason = ? WHERE booking_id = ?", [
+          reason,
+          bookingId,
+        ]);
+      }
+      await recordAdminLog(
+        req.user.id,
+        req.user.username,
+        "REVIEW_PAYMENT",
+        "booking",
+        bookingId,
+        approve ? "อนุมัติสลิป" : `ปฏิเสธสลิป: ${reason}`
+      );
+      return res.json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  }
+);
 
 function resolveValidatedSlipExtension(uploadedFile) {
   const buf = uploadedFile.buffer;
@@ -644,7 +672,8 @@ function resolveValidatedSlipExtension(uploadedFile) {
 
 app.post(
   "/api/payments/:id/payout",
-  verifyToken(["admin", "owner"]),
+  verifyToken("admin"),
+  guardBookingAccess(db, { access: "admin", allowedStatuses: ["completed"] }),
   upload.single("file"),
   async (req, res) => {
     try {

@@ -8,7 +8,7 @@ try {
   argon2 = null;
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || "your_super_secret_jwt_key_here";
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(48).toString("hex");
 
 function sha256Hex(rawText) {
   return crypto.createHash("sha256").update(String(rawText)).digest("hex");
@@ -95,6 +95,42 @@ function expandAllowedRoles(allowedRoles) {
   return expanded;
 }
 
+async function findActiveAccount(userId) {
+  const db = require("./db_config").promise();
+  const [accounts] = await db.query(
+    "SELECT role, status FROM users WHERE user_id = ? LIMIT 1",
+    [userId]
+  );
+  return accounts[0] || null;
+}
+
+function isAccountSuspended(account) {
+  return (
+    !account ||
+    account.status === "suspended" ||
+    account.status === "disabled" ||
+    account.role === "disabled"
+  );
+}
+
+async function authorizeDecodedToken(decodedUser, allowedSet, request, response, nextFn) {
+  try {
+    const account = await findActiveAccount(decodedUser.id);
+    if (isAccountSuspended(account)) {
+      return response.status(401).json({ error: "บัญชีถูกระงับหรือไม่พบบัญชี" });
+    }
+    decodedUser.dbRole = account.role;
+    decodedUser.role = normalizeRoleForApp(account.role);
+    request.user = decodedUser;
+    if (allowedSet.size > 0 && !allowedSet.has(decodedUser.role) && !allowedSet.has(decodedUser.dbRole)) {
+      return response.status(403).json({ error: "Access denied: insufficient permissions" });
+    }
+    return nextFn();
+  } catch (_dbErr) {
+    return response.status(503).json({ error: "Database unavailable" });
+  }
+}
+
 const verifyToken = (allowedRoles = []) => {
   const roles = expandAllowedRoles(allowedRoles);
   return (req, res, next) => {
@@ -107,11 +143,7 @@ const verifyToken = (allowedRoles = []) => {
       if (err) {
         return res.status(401).json({ error: "Invalid or expired token" });
       }
-      req.user = decodedUser;
-      if (roles.size > 0 && !roles.has(decodedUser.role) && !roles.has(decodedUser.dbRole)) {
-        return res.status(403).json({ error: "Access denied: insufficient permissions" });
-      }
-      return next();
+      void authorizeDecodedToken(decodedUser, roles, req, res, next);
     });
   };
 };

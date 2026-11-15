@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node app.js",
     "dev": "node --watch app.js",
-    "test": "node --test test/app.test.js"
+    "test": "node --test test/privacy.test.js test/app.test.js"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.0.2",

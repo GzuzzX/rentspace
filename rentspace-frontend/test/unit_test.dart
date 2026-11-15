@@ -7,27 +7,59 @@ import 'package:rentspace/controllers/payment_controller.dart';
 import 'package:rentspace/controllers/space_controller.dart';
 import 'package:rentspace/data/app_store.dart';
 import 'package:rentspace/models/domain.dart';
+import 'package:rentspace/services/api_client.dart';
 import 'package:rentspace/services/token_service.dart';
 
 // mock TokenService class (แบบเดียวกับ MockAuthService ในแล็บอาจารย์)
 class MockTokenService extends Mock implements TokenService {}
 
-void main() {
+Future<bool> _probeLiveBackend() async {
+  const forceLive = bool.fromEnvironment('RUN_LIVE_TESTS');
+  if (forceLive) return true;
+  final client = ApiClient();
+  try {
+    await client.request('GET', '/health').timeout(const Duration(seconds: 2));
+    return true;
+  } catch (_) {
+    return false;
+  } finally {
+    client.client.close();
+  }
+}
+
+Future<String> _loginToken(String email) async {
+  final client = ApiClient();
+  try {
+    final json =
+        await client.request('POST', '/auth/login', {
+              'email': email,
+              'password': 'password',
+            })
+            as Map<String, dynamic>;
+    return json['token'] as String;
+  } finally {
+    client.client.close();
+  }
+}
+
+Future<void> main() async {
+  final liveBackendReady = await _probeLiveBackend();
+  final Object liveSkipReason = liveBackendReady
+      ? false
+      : 'Live backend unavailable at http://localhost:3001/api';
+
   late String tokenRenter;
   late String tokenOwner;
   late String tokenAdmin;
 
-  setUp(() {
-    // JWT Token จริงที่ได้จาก API (/api/login) ของ Backend
-    tokenRenter =
-        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MTAwMiwidXNlcl9pZCI6MTAwMiwidXNlcm5hbWUiOiJyZW50ZXIwMSIsImVtYWlsIjoicmVudGVyMDFAcmVudHNwYWNlLnRlc3QiLCJyb2xlIjoicmVudGVyIiwiZGJSb2xlIjoiY3VzdG9tZXIiLCJpYXQiOjE3OTQ2NzgzNjQsImV4cCI6MTc5NTI4MzE2NH0.0v4vnBSOEVjfExaXkauw0ZIJTqJIItv7lVVMp_e4dX8';
-    tokenOwner =
-        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MTAwMSwidXNlcl9pZCI6MTAwMSwidXNlcm5hbWUiOiJvd25lcjAxIiwiZW1haWwiOiJvd25lcjAxQHJlbnRzcGFjZS50ZXN0Iiwicm9sZSI6Im93bmVyIiwiZGJSb2xlIjoib3duZXIiLCJpYXQiOjE3OTQ2NzgzNjQsImV4cCI6MTc5NTI4MzE2NH0.jwnf1_knYzRmdAuwynqR-vAu_I6HiHumFN61BRnMFdY';
-    tokenAdmin =
-        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MTAwMywidXNlcl9pZCI6MTAwMywidXNlcm5hbWUiOiJhZG1pbjAxIiwiZW1haWwiOiJhZG1pbjAxQHJlbnRzcGFjZS50ZXN0Iiwicm9sZSI6ImFkbWluIiwiZGJSb2xlIjoiYWRtaW4iLCJpYXQiOjE3OTQ2NzgzNjQsImV4cCI6MTc5NTI4MzE2NH0.Y-Jj_g7NVQXawgFkWfOm3MqegjP35ixnE4GOITQOR7g';
+  setUpAll(() async {
+    if (!liveBackendReady) return;
+    tokenRenter = await _loginToken('renter01@rentspace.test');
+    tokenOwner = await _loginToken('owner01@rentspace.test');
+    tokenAdmin = await _loginToken('admin01@rentspace.test');
   });
 
-  group('Login Test (Live Backend API)', () {
+  group('Login Test (Live Backend API)', skip: liveSkipReason, () {
     test('1. Login correctly should return user role', () async {
       final mockTokenService = MockTokenService();
       when(() => mockTokenService.saveToken(any())).thenAnswer((_) async {});
@@ -67,7 +99,7 @@ void main() {
     });
   });
 
-  group('User & Space Test (Using JWT token from API)', () {
+  group('User & Space Test (Using JWT token from API)', skip: liveSkipReason, () {
     test('3. Fetch spaces with Renter token should return spaces from DB', () async {
       final mockTokenService = MockTokenService();
       final store = AppStore();
@@ -178,7 +210,7 @@ void main() {
     });
   });
 
-  group('Admin Test (Using Admin JWT token from API)', () {
+  group('Admin Test (Using Admin JWT token from API)', skip: liveSkipReason, () {
     test('7. Admin token should load all users and toggle user active status', () async {
       final mockTokenService = MockTokenService();
       final store = AppStore();
@@ -228,7 +260,7 @@ void main() {
     });
   });
 
-  group('Booking & Payment Test (Using Renter & Owner JWT tokens)', () {
+  group('Booking & Payment Test (Using Renter & Owner JWT tokens)', skip: liveSkipReason, () {
     test('9. Create booking -> Owner approve -> Upload slip -> Confirm -> Complete & Review', () async {
       final mockTokenService = MockTokenService();
       final store = AppStore();
@@ -414,12 +446,19 @@ void main() {
       await paymentController.submitAsync(bSlip.id, 'slip2.png', pngBytes, 'ส่งใหม่ครบถ้วน');
       expect(store.booking(bSlip.id).status, BookingStatus.slipReview);
 
-      // Admin อนุมัติสลิปและโอนเงินให้เจ้าของ (Payout)
+      // Admin อนุมัติสลิป -> เจ้าของยืนยันจบงาน -> Admin โอนเงินให้เจ้าของ (Payout)
       when(() => mockTokenService.loadToken()).thenAnswer((_) async => tokenAdmin);
       await authController.restoreSessionAsync();
       await paymentController.reviewAsync(bSlip.id, true, '');
       expect(store.booking(bSlip.id).status, BookingStatus.confirmed);
 
+      when(() => mockTokenService.loadToken()).thenAnswer((_) async => tokenOwner);
+      await authController.restoreSessionAsync();
+      await bookingController.completeAsync(bSlip.id);
+      expect(store.booking(bSlip.id).status, BookingStatus.completed);
+
+      when(() => mockTokenService.loadToken()).thenAnswer((_) async => tokenAdmin);
+      await authController.restoreSessionAsync();
       await paymentController.payoutAsync(bSlip.id);
       expect(store.booking(bSlip.id).paidOutAt, isNotNull);
 
@@ -438,7 +477,7 @@ void main() {
     });
   });
 
-  group('Profile, Password, Availability, Issues & Validation Logic Test', () {
+  group('Profile, Password, Availability, Issues & Validation Logic Test', skip: liveSkipReason, () {
     test('12. Update profile & Change password with Renter token', () async {
       final mockTokenService = MockTokenService();
       final store = AppStore();
@@ -628,6 +667,21 @@ void main() {
           'virus.exe',
           Uint8List.fromList([1, 2, 3]),
         ),
+        throwsA(isA<DomainError>()),
+      );
+    });
+  });
+
+  group('Offline Domain Rules Test (Always runs without backend)', () {
+    test('17. Rent calculation, duration bounds, and slip byte validation', () {
+      expect(BookingController.rent(350, 540, 720, days: 2), 2100);
+      expect(BookingController.durationError(600, 630), isNotNull);
+      expect(BookingController.durationError(600, 720), isNull);
+
+      final validPng = Uint8List.fromList([137, 80, 78, 71, 13, 10, 26, 10, 0]);
+      expect(() => PaymentController.validateSlip('slip.png', validPng), returnsNormally);
+      expect(
+        () => PaymentController.validateSlip('virus.png', Uint8List.fromList([1, 2, 3])),
         throwsA(isA<DomainError>()),
       );
     });
