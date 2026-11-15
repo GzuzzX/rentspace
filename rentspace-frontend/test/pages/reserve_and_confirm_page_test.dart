@@ -9,16 +9,13 @@ import 'package:rentspace/ui/booking_pages.dart';
 import 'package:rentspace/ui/home_page.dart';
 
 import '../fixtures/mock_controllers.dart';
-import '../xampp_db_fixture.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  late Map<String, dynamic> xamppSnapshot;
 
   setUpAll(() async {
     registerMockControllerFallbacks();
     await setupTestChannels();
-    xamppSnapshot = await loadXamppSnapshot();
   });
 
   group('ReservePage & BookingConfirmationPage (Mocktail)', () {
@@ -28,7 +25,7 @@ void main() {
         configureMobileViewport(tester);
         addTearDown(() => resetMobileViewport(tester));
 
-        final store = createSeededMockStore(xamppSnapshot, viewerId: '1002');
+        final store = createMockStore(viewerId: '1002');
         final targetSpace = store.space('2001');
         final mocks = ControllerBundle(store);
         var attemptCount = 0;
@@ -150,7 +147,7 @@ void main() {
         configureMobileViewport(tester);
         addTearDown(() => resetMobileViewport(tester));
 
-        final store = createSeededMockStore(xamppSnapshot, viewerId: '1004');
+        final store = createMockStore(viewerId: '1004');
         store.currentUser!.phone = '';
         final mocks = ControllerBundle(store);
         var attemptCount = 0;

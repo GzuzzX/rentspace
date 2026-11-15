@@ -8,16 +8,13 @@ import 'package:rentspace/ui/home_page.dart';
 import 'package:rentspace/ui/login_page.dart';
 
 import '../fixtures/mock_controllers.dart';
-import '../xampp_db_fixture.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  late Map<String, dynamic> xamppSnapshot;
 
   setUpAll(() async {
     registerMockControllerFallbacks();
     await setupTestChannels();
-    xamppSnapshot = await loadXamppSnapshot();
   });
 
   group('HomePage Roles, Search, Dashboards & Navigation (Mocktail)', () {
@@ -27,20 +24,15 @@ void main() {
         configureMobileViewport(tester);
         addTearDown(() => resetMobileViewport(tester));
 
-        final store = createSeededMockStore(xamppSnapshot, signedIn: false);
+        final store = createMockStore(signedIn: false);
         final userIdByEmail = {
-          for (final entry in xamppSnapshot['users'] as List)
-            entry['email'] as String: '${entry['id']}',
+          for (final entry in store.users) entry.email: entry.id,
         };
         final mocks = ControllerBundle(store);
 
         when(() => mocks.auth.loginAsync(any(), any())).thenAnswer((inv) async {
           final email = inv.positionalArguments[0] as String;
-          populateStoreFromXamppSnapshot(
-            store,
-            xamppSnapshot,
-            viewerId: userIdByEmail[email]!,
-          );
+          populateMockStore(store, viewerId: userIdByEmail[email]!);
           store.notify();
         });
 
@@ -105,7 +97,7 @@ void main() {
         configureMobileViewport(tester);
         addTearDown(() => resetMobileViewport(tester));
 
-        final store = createSeededMockStore(xamppSnapshot, viewerId: '1002');
+        final store = createMockStore(viewerId: '1002');
         store.currentUser!.favorites.clear();
         final approvedCount = store.spaces
             .where((entry) => entry.status == SpaceStatus.approved)
@@ -246,20 +238,19 @@ void main() {
         configureMobileViewport(tester);
         addTearDown(() => resetMobileViewport(tester));
 
-        final store = createSeededMockStore(xamppSnapshot, viewerId: '1001');
+        final store = createMockStore(viewerId: '1001');
         store.user('1001').bankInfo = '';
-        findOrSeedBooking(
+        findBookingByStatus(
           store,
           status: BookingStatus.ownerReview,
           spaceId: '2001',
           renterId: '1002',
         );
-        findOrSeedBooking(
+        findBookingByStatus(
           store,
           status: BookingStatus.confirmed,
           preferredId: '3001',
           spaceId: '2001',
-          overrideDate: mockClockNow.subtract(const Duration(days: 1)),
         );
         final ownerBookings = store.bookings
             .where((entry) => entry.ownerId == '1001')
@@ -377,7 +368,7 @@ void main() {
         configureMobileViewport(tester);
         addTearDown(() => resetMobileViewport(tester));
 
-        final store = createSeededMockStore(xamppSnapshot, viewerId: '1003');
+        final store = createMockStore(viewerId: '1003');
         if (!store.issues.any((entry) => !entry.closed)) {
           store.issues.add(
             Issue(
@@ -559,7 +550,7 @@ void main() {
         configureMobileViewport(tester);
         addTearDown(() => resetMobileViewport(tester));
 
-        final store = createSeededMockStore(xamppSnapshot, viewerId: '1002');
+        final store = createMockStore(viewerId: '1002');
         store.failNextRefresh = true;
         final mocks = ControllerBundle(store);
 
@@ -592,7 +583,7 @@ void main() {
         configureMobileViewport(tester);
         addTearDown(() => resetMobileViewport(tester));
 
-        final store = createSeededMockStore(xamppSnapshot, viewerId: '1002');
+        final store = createMockStore(viewerId: '1002');
         final approvedCount = store.spaces
             .where((entry) => entry.status == SpaceStatus.approved)
             .length;

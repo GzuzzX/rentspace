@@ -10,16 +10,13 @@ import 'package:rentspace/ui/booking_pages.dart';
 import 'package:rentspace/ui/common.dart';
 
 import '../fixtures/mock_controllers.dart';
-import '../xampp_db_fixture.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  late Map<String, dynamic> xamppSnapshot;
 
   setUpAll(() async {
     registerMockControllerFallbacks();
     await setupTestChannels();
-    xamppSnapshot = await loadXamppSnapshot();
   });
 
   group('BookingPage, SlipPage & Admin Payout (Mocktail)', () {
@@ -29,28 +26,26 @@ void main() {
         configureMobileViewport(tester);
         addTearDown(() => resetMobileViewport(tester));
 
-        final store = createSeededMockStore(xamppSnapshot, viewerId: '1002');
-        final reviewBooking = findOrSeedBooking(
+        final store = createMockStore(viewerId: '1002');
+        final reviewBooking = findBookingByStatus(
           store,
           status: BookingStatus.ownerReview,
           spaceId: '2001',
           renterId: '1002',
         );
-        final pastConfirmedBooking = findOrSeedBooking(
+        final pastConfirmedBooking = findBookingByStatus(
           store,
           status: BookingStatus.confirmed,
           preferredId: '3001',
           spaceId: '2001',
-          overrideDate: mockClockNow.subtract(const Duration(days: 1)),
         );
-        final futureConfirmedBooking = findOrSeedBooking(
+        final futureConfirmedBooking = findBookingByStatus(
           store,
           status: BookingStatus.confirmed,
           preferredId: '3002',
           spaceId: '2002',
-          overrideDate: mockClockNow.add(const Duration(days: 4)),
         );
-        final rejectedBooking = findOrSeedBooking(
+        final rejectedBooking = findBookingByStatus(
           store,
           status: BookingStatus.ownerRejected,
           preferredId: '3020',
@@ -196,8 +191,8 @@ void main() {
         configureMobileViewport(tester);
         addTearDown(() => resetMobileViewport(tester));
 
-        final store = createSeededMockStore(xamppSnapshot, viewerId: '1002');
-        final targetBooking = findOrSeedBooking(
+        final store = createMockStore(viewerId: '1002');
+        final targetBooking = findBookingByStatus(
           store,
           status: BookingStatus.paymentDue,
           spaceId: '2001',
@@ -364,8 +359,8 @@ void main() {
         configureMobileViewport(tester);
         addTearDown(() => resetMobileViewport(tester));
 
-        final store = createSeededMockStore(xamppSnapshot, viewerId: '1003');
-        final slipReviewBooking = findOrSeedBooking(
+        final store = createMockStore(viewerId: '1003');
+        final slipReviewBooking = findBookingByStatus(
           store,
           status: BookingStatus.slipReview,
           spaceId: '2001',
@@ -380,12 +375,11 @@ void main() {
             ),
           );
         }
-        final completedReviewBooking = findOrSeedBooking(
+        final completedReviewBooking = findBookingByStatus(
           store,
           status: BookingStatus.completed,
           spaceId: '2002',
           renterId: '1002',
-          overrideDate: mockClockNow.subtract(const Duration(days: 4)),
           requirePendingPayout: true,
         )..review = null;
 

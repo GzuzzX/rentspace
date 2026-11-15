@@ -9,7 +9,6 @@ import 'package:rentspace/ui/common.dart';
 import 'package:rentspace/ui/space_form.dart';
 
 import '../fixtures/mock_controllers.dart';
-import '../xampp_db_fixture.dart';
 
 Future<void> _settleBrokenImageFrames(WidgetTester tester) async {
   await tester.runAsync(
@@ -21,12 +20,10 @@ Future<void> _settleBrokenImageFrames(WidgetTester tester) async {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  late Map<String, dynamic> xamppSnapshot;
 
   setUpAll(() async {
     registerMockControllerFallbacks();
     await setupTestChannels();
-    xamppSnapshot = await loadXamppSnapshot();
   });
 
   group('Broken Image Fallback & Small Viewport Responsiveness (Mocktail)', () {
@@ -36,7 +33,7 @@ void main() {
         configureMobileViewport(tester);
         addTearDown(() => resetMobileViewport(tester));
 
-        final store = createSeededMockStore(xamppSnapshot, viewerId: '1002');
+        final store = createMockStore(viewerId: '1002');
         final brokenSpace = store.space('2001')
           ..image = ''
           ..imageBytes = corruptMockImageBytes;
@@ -100,7 +97,7 @@ void main() {
           16,
           'ทดสอบหน้าจอแคบคีย์บอร์ดเปิดข้อความยาว',
         ).join(' ');
-        final store = createSeededMockStore(xamppSnapshot, viewerId: '1002');
+        final store = createMockStore(viewerId: '1002');
         final longSpace = Space(
           id: '2888',
           ownerId: '1001',
@@ -114,7 +111,7 @@ void main() {
           status: SpaceStatus.approved,
         );
         store.spaces.add(longSpace);
-        final rejectedBooking = findOrSeedBooking(
+        final rejectedBooking = findBookingByStatus(
           store,
           status: BookingStatus.ownerRejected,
           spaceId: '2001',

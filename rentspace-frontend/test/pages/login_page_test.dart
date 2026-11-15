@@ -10,16 +10,13 @@ import 'package:rentspace/ui/home_page.dart';
 import 'package:rentspace/ui/login_page.dart';
 
 import '../fixtures/mock_controllers.dart';
-import '../xampp_db_fixture.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  late Map<String, dynamic> xamppSnapshot;
 
   setUpAll(() async {
     registerMockControllerFallbacks();
     await setupTestChannels();
-    xamppSnapshot = await loadXamppSnapshot();
   });
 
   group('LoginPage & Auth Flows (Mocktail)', () {
@@ -29,7 +26,7 @@ void main() {
         configureMobileViewport(tester);
         addTearDown(() => resetMobileViewport(tester));
 
-        final store = createSeededMockStore(xamppSnapshot, signedIn: false);
+        final store = createMockStore(signedIn: false);
         final mocks = ControllerBundle(store);
         final restoreCompleter = Completer<AppUser?>();
         when(
@@ -56,10 +53,7 @@ void main() {
 
         await unmountApp(tester);
 
-        final savedStore = createSeededMockStore(
-          xamppSnapshot,
-          signedIn: false,
-        );
+        final savedStore = createMockStore(signedIn: false);
         final savedMocks = ControllerBundle(savedStore);
         final savedCompleter = Completer<AppUser?>();
         when(
@@ -78,11 +72,7 @@ void main() {
 
         expect(find.byType(CircularProgressIndicator), findsOneWidget);
 
-        populateStoreFromXamppSnapshot(
-          savedStore,
-          xamppSnapshot,
-          viewerId: '1002',
-        );
+        populateMockStore(savedStore, viewerId: '1002');
         savedStore.notify();
         savedCompleter.complete(savedStore.currentUser);
         await tester.pumpAndSettle();
@@ -100,7 +90,7 @@ void main() {
         configureMobileViewport(tester);
         addTearDown(() => resetMobileViewport(tester));
 
-        final store = createSeededMockStore(xamppSnapshot, signedIn: false);
+        final store = createMockStore(signedIn: false);
         final mocks = ControllerBundle(store);
         final suspendedUser = store.users.firstWhere(
           (entry) => !entry.active,
@@ -189,7 +179,7 @@ void main() {
         configureMobileViewport(tester);
         addTearDown(() => resetMobileViewport(tester));
 
-        final store = createSeededMockStore(xamppSnapshot, signedIn: false);
+        final store = createMockStore(signedIn: false);
         final mocks = ControllerBundle(store);
         final loginCompleter = Completer<void>();
 
@@ -197,11 +187,7 @@ void main() {
           () => mocks.auth.loginAsync('renter01@rentspace.test', 'password'),
         ).thenAnswer((_) async {
           await loginCompleter.future;
-          populateStoreFromXamppSnapshot(
-            store,
-            xamppSnapshot,
-            viewerId: '1002',
-          );
+          populateMockStore(store, viewerId: '1002');
           store.notify();
         });
 
@@ -261,7 +247,7 @@ void main() {
         configureMobileViewport(tester);
         addTearDown(() => resetMobileViewport(tester));
 
-        final store = createSeededMockStore(xamppSnapshot, signedIn: false);
+        final store = createMockStore(signedIn: false);
         final mocks = ControllerBundle(store);
 
         when(

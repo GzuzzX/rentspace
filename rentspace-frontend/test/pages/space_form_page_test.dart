@@ -7,16 +7,13 @@ import 'package:rentspace/ui/home_page.dart';
 import 'package:rentspace/ui/space_form.dart';
 
 import '../fixtures/mock_controllers.dart';
-import '../xampp_db_fixture.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  late Map<String, dynamic> xamppSnapshot;
 
   setUpAll(() async {
     registerMockControllerFallbacks();
     await setupTestChannels();
-    xamppSnapshot = await loadXamppSnapshot();
   });
 
   group('SpaceForm & AvailabilityPage (Mocktail)', () {
@@ -26,7 +23,7 @@ void main() {
         configureMobileViewport(tester);
         addTearDown(() => resetMobileViewport(tester));
 
-        final store = createSeededMockStore(xamppSnapshot, viewerId: '1001');
+        final store = createMockStore(viewerId: '1001');
         final mocks = ControllerBundle(store);
 
         when(
@@ -235,7 +232,7 @@ void main() {
         configureMobileViewport(tester);
         addTearDown(() => resetMobileViewport(tester));
 
-        final store = createSeededMockStore(xamppSnapshot, viewerId: '1001');
+        final store = createMockStore(viewerId: '1001');
         final mocks = ControllerBundle(store);
 
         when(

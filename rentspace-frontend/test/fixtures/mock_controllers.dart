@@ -12,8 +12,6 @@ import 'package:rentspace/controllers/space_controller.dart';
 import 'package:rentspace/data/app_store.dart';
 import 'package:rentspace/models/domain.dart';
 
-import '../xampp_db_fixture.dart';
-
 class MockAuthController extends Mock implements AuthController {}
 
 class MockSpaceController extends Mock implements SpaceController {}
@@ -146,17 +144,299 @@ Future<void> unmountApp(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
-TestStore createSeededMockStore(
-  Map<String, dynamic> xamppSnapshot, {
+List<AppUser> _buildMockUsers() => [
+  AppUser(
+    id: '1001',
+    name: 'ภูมิ ศรีสุข (Owner)',
+    email: 'owner01@rentspace.test',
+    password: 'password',
+    role: UserRole.owner,
+    phone: '089-876-5432',
+    bankInfo: '',
+    active: true,
+  ),
+  AppUser(
+    id: '1002',
+    name: 'ณัฐ วงศ์ดี (Renter)',
+    email: 'renter01@rentspace.test',
+    password: 'password',
+    role: UserRole.renter,
+    phone: '081-234-5678',
+    bankInfo: 'SCB 123-456-7890',
+    active: true,
+  ),
+  AppUser(
+    id: '1003',
+    name: 'ผู้ดูแลระบบ (Admin)',
+    email: 'admin01@rentspace.test',
+    password: 'password',
+    role: UserRole.admin,
+    phone: '02-999-8888',
+    bankInfo: '',
+    active: true,
+  ),
+  AppUser(
+    id: '1004',
+    name: 'มินท์ กมลวรรณ',
+    email: 'mint@rentspace.test',
+    password: 'password',
+    role: UserRole.renter,
+    phone: '082-333-4444',
+    bankInfo: '',
+    active: true,
+  ),
+  AppUser(
+    id: '1005',
+    name: 'แพรว ใจงาม',
+    email: 'owner02@rentspace.test',
+    password: 'password',
+    role: UserRole.owner,
+    phone: '086-555-7777',
+    bankInfo: '',
+    active: false,
+  ),
+];
+
+List<Space> _buildMockSpaces() => [
+  Space(
+    id: '2001',
+    ownerId: '1001',
+    name: 'ห้องประชุมสว่างใจ',
+    category: 'meeting_room',
+    location: '88 ซ.อารีย์ 4 พญาไท กรุงเทพฯ',
+    price: 350,
+    capacity: 10,
+    description: 'ห้องประชุมพร้อมจอสมาร์ททีวีและอินเทอร์เน็ตความเร็วสูง',
+    imageBytes: validMockPngBytes,
+    amenities: ['Wi-Fi'],
+    status: SpaceStatus.approved,
+    dbRating: 4.8,
+    dbReviewCount: 2,
+  ),
+  Space(
+    id: '2002',
+    ownerId: '1001',
+    name: 'The Quiet Nook (ห้องอ่านหนังสือ)',
+    category: 'study_room',
+    location: '12 ถ.พระราม 4 ปทุมวัน กรุงเทพฯ',
+    price: 120,
+    capacity: 4,
+    description: 'ห้องอ่านหนังสือเงียบสงบ แสงธรรมชาติ เหมาะสำหรับอ่านหนังสือหรือติวสอบ',
+    amenities: ['Wi-Fi', 'เครื่องปรับอากาศ'],
+    status: SpaceStatus.approved,
+    dbRating: 4.9,
+    dbReviewCount: 3,
+  ),
+  Space(
+    id: '2005',
+    ownerId: '1001',
+    name: 'พื้นที่จัดเวิร์กช็อป',
+    category: 'event_space',
+    location: 'เชียงใหม่ นิมมานเหมินท์',
+    price: 3200,
+    capacity: 30,
+    description: 'พื้นที่อเนกประสงค์สำหรับกิจกรรมกลุ่ม เวิร์กช็อป และสัมมนา',
+    amenities: ['Wi-Fi', 'เครื่องปรับอากาศ'],
+    status: SpaceStatus.pending,
+    dbRating: 4.5,
+    dbReviewCount: 1,
+  ),
+  Space(
+    id: '2098',
+    ownerId: '1001',
+    name: 'พื้นที่ปรับปรุงภาพถ่าย',
+    category: 'meeting_room',
+    location: 'พญาไท กรุงเทพฯ',
+    price: 350,
+    capacity: 10,
+    description: 'รออัปเดตภาพ',
+    amenities: ['Wi-Fi'],
+    status: SpaceStatus.rejected,
+  )..reviewReason = 'ภาพไม่ชัด',
+];
+
+List<Booking> _buildMockBookings() => [
+  Booking(
+    id: '3001',
+    spaceId: '2001',
+    ownerId: '1001',
+    renterId: '1002',
+    spaceName: 'ห้องประชุมสว่างใจ',
+    date: mockClockNow.subtract(const Duration(days: 1)),
+    startMinutes: 540,
+    endMinutes: 660,
+    rentAmount: 700,
+    status: BookingStatus.confirmed,
+  )
+    ..createdAt = mockClockNow.subtract(const Duration(days: 3))
+    ..confirmedAt = mockClockNow.subtract(const Duration(days: 2)),
+  Booking(
+    id: '3002',
+    spaceId: '2002',
+    ownerId: '1001',
+    renterId: '1002',
+    spaceName: 'The Quiet Nook (ห้องอ่านหนังสือ)',
+    date: mockClockNow.add(const Duration(days: 4)),
+    startMinutes: 540,
+    endMinutes: 660,
+    rentAmount: 240,
+    status: BookingStatus.confirmed,
+  )
+    ..createdAt = mockClockNow.subtract(const Duration(days: 1))
+    ..confirmedAt = mockClockNow,
+  Booking(
+    id: '3003',
+    spaceId: '2001',
+    ownerId: '1001',
+    renterId: '1002',
+    spaceName: 'ห้องประชุมสว่างใจ',
+    date: mockClockNow.add(const Duration(days: 5)),
+    startMinutes: 540,
+    endMinutes: 660,
+    rentAmount: 700,
+    status: BookingStatus.ownerReview,
+  )..createdAt = mockClockNow,
+  Booking(
+    id: '3004',
+    spaceId: '2001',
+    ownerId: '1001',
+    renterId: '1002',
+    spaceName: 'ห้องประชุมสว่างใจ',
+    date: mockClockNow.add(const Duration(days: 6)),
+    startMinutes: 540,
+    endMinutes: 660,
+    rentAmount: 700,
+    status: BookingStatus.paymentDue,
+  )
+    ..createdAt = mockClockNow.subtract(const Duration(hours: 2))
+    ..approvedAt = mockClockNow,
+  Booking(
+    id: '3005',
+    spaceId: '2001',
+    ownerId: '1001',
+    renterId: '1002',
+    spaceName: 'ห้องประชุมสว่างใจ',
+    date: mockClockNow.add(const Duration(days: 7)),
+    startMinutes: 540,
+    endMinutes: 660,
+    rentAmount: 700,
+    status: BookingStatus.slipReview,
+  )
+    ..createdAt = mockClockNow.subtract(const Duration(hours: 3))
+    ..approvedAt = mockClockNow.subtract(const Duration(hours: 2))
+    ..slips.add(
+      PaymentSlip(
+        name: 'quick_slip.png',
+        bytes: validMockPngBytes,
+        submittedAt: mockClockNow,
+      ),
+    ),
+  Booking(
+    id: '3006',
+    spaceId: '2002',
+    ownerId: '1001',
+    renterId: '1002',
+    spaceName: 'The Quiet Nook (ห้องอ่านหนังสือ)',
+    date: mockClockNow.subtract(const Duration(days: 4)),
+    startMinutes: 540,
+    endMinutes: 660,
+    rentAmount: 240,
+    status: BookingStatus.completed,
+  )
+    ..createdAt = mockClockNow.subtract(const Duration(days: 6))
+    ..completedAt = mockClockNow.subtract(const Duration(days: 3)),
+  Booking(
+    id: '3007',
+    spaceId: '2001',
+    ownerId: '1001',
+    renterId: '1004',
+    spaceName: 'ห้องประชุมสว่างใจ',
+    date: mockClockNow.add(const Duration(days: 8)),
+    startMinutes: 540,
+    endMinutes: 660,
+    rentAmount: 700,
+    status: BookingStatus.canceled,
+  )
+    ..createdAt = mockClockNow.subtract(const Duration(days: 2))
+    ..reason = 'ผู้เช่ายกเลิกเอง',
+  Booking(
+    id: '3020',
+    spaceId: '2001',
+    ownerId: '1001',
+    renterId: '1002',
+    spaceName: 'ห้องประชุมสว่างใจ',
+    date: mockClockNow.add(const Duration(days: 9)),
+    startMinutes: 540,
+    endMinutes: 660,
+    rentAmount: 700,
+    status: BookingStatus.ownerRejected,
+  )
+    ..createdAt = mockClockNow.subtract(const Duration(days: 2))
+    ..reason = 'ช่วงเวลาไม่สะดวก',
+];
+
+void populateMockStore(
+  TestStore store, {
+  String viewerId = '1002',
+  bool signedIn = true,
+}) {
+  store.users
+    ..clear()
+    ..addAll(_buildMockUsers());
+  store.spaces
+    ..clear()
+    ..addAll(_buildMockSpaces());
+  store.bookings
+    ..clear()
+    ..addAll(_buildMockBookings());
+  store.issues
+    ..clear()
+    ..add(
+      Issue(
+        id: 'iss_open_1',
+        reporterId: '1002',
+        subject: 'แอร์ไม่เย็น',
+        detail: 'ห้องประชุมชั้น 2 แอร์ไม่เย็น',
+      ),
+    );
+  store.logs.clear();
+  store.busySlots.clear();
+  store.publicReviews.clear();
+  store.syncError = null;
+  store.currentUser = signedIn ? store.user(viewerId) : null;
+}
+
+TestStore createMockStore({
   String viewerId = '1002',
   bool signedIn = true,
 }) {
   final store = TestStore(clock: () => mockClockNow);
-  populateStoreFromXamppSnapshot(store, xamppSnapshot, viewerId: viewerId);
-  if (!signedIn) {
-    store.currentUser = null;
-  }
+  populateMockStore(store, viewerId: viewerId, signedIn: signedIn);
   return store;
+}
+
+Booking findBookingByStatus(
+  AppStore store, {
+  required BookingStatus status,
+  String? preferredId,
+  String? spaceId,
+  String? renterId,
+  bool requirePendingPayout = false,
+}) {
+  for (final existing in store.bookings) {
+    final matchesId = preferredId == null || existing.id == preferredId;
+    final matchesSpace = spaceId == null || existing.spaceId == spaceId;
+    final matchesRenter = renterId == null || existing.renterId == renterId;
+    final matchesPayout = !requirePendingPayout || existing.paidOutAt == null;
+    if (existing.status == status &&
+        matchesId &&
+        matchesSpace &&
+        matchesRenter &&
+        matchesPayout) {
+      return existing;
+    }
+  }
+  throw StateError('Missing mock booking for $status');
 }
 
 class ControllerBundle {
