@@ -17,6 +17,20 @@ const { toIsoDate, buildSnapshot } = require("./snapshot_builder");
 
 const app = express();
 const db = con.promise();
+
+function guardRecord(ownerOnly = false, states = null, space = false) {
+ return async (req, res, next) => {
+  try {
+   const [rows] = await db.query(space ? "SELECT owner_id FROM spaces WHERE space_id = ?" : "SELECT b.*, s.owner_id FROM bookings b JOIN spaces s ON s.space_id = b.space_id WHERE b.booking_id = ?", [req.params.id]);
+   if (!rows.length) return res.status(404).json({error: "Not found"});
+   const r = rows[0];
+   if (req.user.role !== "admin" && String(r.owner_id) !== String(req.user.id) && (ownerOnly || String(r.customer_id) !== String(req.user.id))) return res.status(403).json({error: "Access denied"});
+   if (states && !states.includes(r.app_status)) return res.status(409).json({error: "Invalid booking state"});
+   next();
+  } catch (_) { res.status(500).json({error: "Record validation failed"}); }
+ };
+}
+
 const uploadsDir = path.join(__dirname, "uploads");
 
 if (!fs.existsSync(uploadsDir)) {
@@ -74,9 +88,7 @@ app.get("/api/health", async (_req, res) => {
   }
 });
 
-app.get("/api/password/:raw", (req, res) => {
-  return res.send(hashPassword(req.params.raw));
-});
+
 
 app.get("/api/state", verifyToken(), async (req, res) => {
   try {
@@ -231,6 +243,7 @@ app.put("/api/auth/profile", verifyToken(), async (req, res) => {
 app.put("/api/auth/password", verifyToken(), async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
+    if (typeof newPassword !== "string" || newPassword.length < 8) return res.status(400).json({error: "Password must have at least 8 characters"});
     const [rows] = await db.query("SELECT * FROM users WHERE user_id = ?", [req.user.id]);
     if (rows.length === 0 || !verifyPassword(rows[0].password_hash, currentPassword)) {
       return res.status(400).json({ error: "รหัสผ่านปัจจุบันไม่ถูกต้อง" });
@@ -311,7 +324,7 @@ app.post("/api/spaces", verifyToken(["owner", "admin"]), async (req, res) => {
   }
 });
 
-app.put("/api/spaces/:id", verifyToken(["owner", "admin"]), async (req, res) => {
+app.put("/api/spaces/:id", verifyToken(["owner", "admin"]), guardRecord(true, null, true), async (req, res) => {
   try {
     const spaceId = req.params.id;
     const title = String(req.body.name || req.body.title || "").trim();
@@ -338,7 +351,7 @@ app.put("/api/spaces/:id", verifyToken(["owner", "admin"]), async (req, res) => 
   }
 });
 
-app.put("/api/spaces/:id/availability", verifyToken(["owner", "admin"]), async (req, res) => {
+app.put("/api/spaces/:id/availability", verifyToken(["owner", "admin"]), guardRecord(true, null, true), async (req, res) => {
   try {
     const spaceId = req.params.id;
     const days = Array.isArray(req.body.days) ? req.body.days : JSON.parse(DEFAULT_WEEK_HOURS);
@@ -422,7 +435,11 @@ app.get("/api/bookings", verifyToken(), async (req, res) => {
 });
 
 app.post("/api/bookings", verifyToken(), async (req, res) => {
+  let connection;
   try {
+    connection = await con.promise().getConnection();
+    await connection.beginTransaction();
+    const db = connection;
     const spaceId = req.body.spaceId || req.body.space_id;
     const startDate = String(req.body.date || req.body.start_date || "").substring(0, 10);
     const days = Math.max(1, Number(req.body.days || 1));
@@ -432,18 +449,33 @@ app.post("/api/bookings", verifyToken(), async (req, res) => {
     const zone = String(req.body.zone || "โซนหลัก (พื้นที่มาตรฐาน)").trim();
     const renterNote = String(req.body.renterNote || "").trim();
 
-    const [spaceRows] = await db.query("SELECT * FROM spaces WHERE space_id = ?", [spaceId]);
+    const [spaceRows] = await db.query("SELECT * FROM spaces WHERE space_id = ? FOR UPDATE", [spaceId]);
     if (spaceRows.length === 0) {
       return res.status(404).json({ error: "ไม่พบพื้นที่" });
     }
     const space = spaceRows[0];
+    if (space.status !== "approved" || req.user.role !== "renter") return res.status(403).json({error: "Space unavailable or invalid role"});
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !Number.isInteger(days) || days < 1 || days > 14 || !Number.isInteger(startMinutes) || !Number.isInteger(endMinutes) || startMinutes < 0 || endMinutes > 1440 || endMinutes - startMinutes < 60 || endMinutes - startMinutes > 720 || !Number.isInteger(attendees) || attendees > Number(space.capacity)) return res.status(400).json({error: "Invalid booking input"});
+    const first = new Date(`${startDate}T00:00:00+07:00`);
+    if (!Number.isFinite(first.getTime()) || first.getTime() + startMinutes * 60000 <= Date.now()) return res.status(400).json({error: "Booking must be in the future"});
+    const hoursConfig = JSON.parse(space.hours_json || DEFAULT_WEEK_HOURS);
+    for (let day = 0; day < days; day++) {
+      const date = new Date(first.getTime() + day * 86400000);
+      const weekday = (new Date(date.getTime() + 7 * 3600000).getUTCDay() + 6) % 7;
+      const hours = hoursConfig[weekday];
+      if (!hours || !hours.open || startMinutes < hours.start || endMinutes > hours.end) return res.status(409).json({error: "Outside opening hours"});
+      const [blocks] = await db.query("SELECT block_id FROM room_blocks WHERE space_id = ? AND COALESCE(start_at, start_date) < ? AND COALESCE(end_at, end_date) > ? LIMIT 1", [spaceId, new Date(date.getTime() + endMinutes * 60000), new Date(date.getTime() + startMinutes * 60000)]);
+      if (blocks.length) return res.status(409).json({error: "Space is blocked"});
+    }
     const hours = Math.max(1, Math.ceil((endMinutes - startMinutes) / 60));
     const totalPrice = Math.round(Number(space.price_per_day || 350)) * hours * days;
     const platformFee = Math.round(totalPrice * 0.05);
 
     const endDateObj = new Date(`${startDate}T00:00:00`);
     endDateObj.setDate(endDateObj.getDate() + (days - 1));
-    const endDate = req.body.end_date || toIsoDate(endDateObj);
+    const endDate = toIsoDate(endDateObj);
+    const [conflicts] = await db.query("SELECT booking_id FROM bookings WHERE space_id = ? AND status NOT IN ('rejected','cancelled') AND start_date <= ? AND end_date >= ? AND start_minutes < ? AND end_minutes > ? LIMIT 1", [spaceId, endDate, startDate, endMinutes, startMinutes]);
+    if (conflicts.length) return res.status(409).json({error: "Time slot already booked"});
 
     const startTimeStr = `${startDate} ${String(Math.floor(startMinutes / 60)).padStart(2, "0")}:${String(
       startMinutes % 60
@@ -472,13 +504,16 @@ app.post("/api/bookings", verifyToken(), async (req, res) => {
         platformFee,
       ]
     );
+    await connection.commit();
     return res.status(201).json({ id: String(ins.insertId), booking_id: ins.insertId });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: "Unable to create booking" });
+  } finally {
+    if (connection) { await connection.rollback(); connection.release(); }
   }
 });
 
-app.post("/api/bookings/:id/approve", verifyToken(["owner", "admin"]), async (req, res) => {
+app.post("/api/bookings/:id/approve", verifyToken(["owner", "admin"]), guardRecord(true, ['ownerReview']), async (req, res) => {
   try {
     await db.query(
       "UPDATE bookings SET status = 'approved', app_status = 'paymentDue', approved_at = NOW(), reason = ?, reason_kind = 'none' WHERE booking_id = ?",
@@ -490,7 +525,7 @@ app.post("/api/bookings/:id/approve", verifyToken(["owner", "admin"]), async (re
   }
 });
 
-app.post("/api/bookings/:id/reject", verifyToken(["owner", "admin"]), async (req, res) => {
+app.post("/api/bookings/:id/reject", verifyToken(["owner", "admin"]), guardRecord(true, ['ownerReview']), async (req, res) => {
   try {
     const reason = String(req.body.reason || "").trim();
     await db.query(
@@ -503,7 +538,7 @@ app.post("/api/bookings/:id/reject", verifyToken(["owner", "admin"]), async (req
   }
 });
 
-app.post("/api/bookings/:id/cancel", verifyToken(), async (req, res) => {
+app.post("/api/bookings/:id/cancel", verifyToken(), guardRecord(false, ['ownerReview', 'paymentDue', 'slipRejected']), async (req, res) => {
   try {
     const reason = String(req.body.reason || "").trim();
     await db.query(
@@ -516,7 +551,7 @@ app.post("/api/bookings/:id/cancel", verifyToken(), async (req, res) => {
   }
 });
 
-app.post("/api/bookings/:id/complete", verifyToken(), async (req, res) => {
+app.post("/api/bookings/:id/complete", verifyToken(), guardRecord(false, ['confirmed']), async (req, res) => {
   try {
     await db.query(
       "UPDATE bookings SET status = 'completed', app_status = 'completed', completed_at = NOW() WHERE booking_id = ?",
@@ -528,7 +563,7 @@ app.post("/api/bookings/:id/complete", verifyToken(), async (req, res) => {
   }
 });
 
-app.post("/api/bookings/:id/review", verifyToken(), async (req, res) => {
+app.post("/api/bookings/:id/review", verifyToken(), guardRecord(false, ['completed']), async (req, res) => {
   try {
     const bookingId = req.params.id;
     const rating = Math.min(5, Math.max(1, Number(req.body.rating || 5)));
@@ -553,7 +588,7 @@ app.post("/api/bookings/:id/review", verifyToken(), async (req, res) => {
 
 //=================== 5. Payments Routes =======================================
 
-app.post("/api/payments/:id/slip", verifyToken(), upload.single("file"), async (req, res) => {
+app.post("/api/payments/:id/slip", verifyToken(), guardRecord(false, ["paymentDue", "slipRejected"]), upload.single("file"), async (req, res) => {
   try {
     const bookingId = req.params.id;
     const note = String(req.body.note || "").trim();
@@ -561,7 +596,8 @@ app.post("/api/payments/:id/slip", verifyToken(), upload.single("file"), async (
     if (!file) {
       return res.status(400).json({ error: "กรุณาแนบไฟล์สลิป" });
     }
-    const ext = path.extname(file.originalname || ".jpg") || ".jpg";
+    const ext = resolveValidatedSlipExtension(file);
+    if (!ext) return res.status(400).json({error: "Invalid image"});
     const storedName = `slip_${bookingId}_${Date.now()}${ext}`;
     fs.writeFileSync(path.join(uploadsDir, storedName), file.buffer);
 
@@ -585,7 +621,7 @@ app.post("/api/payments/:id/slip", verifyToken(), upload.single("file"), async (
   }
 });
 
-app.post("/api/payments/:id/review", verifyToken(["owner", "admin"]), async (req, res) => {
+app.post("/api/payments/:id/review", verifyToken(["owner", "admin"]), guardRecord(true, ["slipReview"]), async (req, res) => {
   try {
     const bookingId = req.params.id;
     const approve = Boolean(req.body.approve);
@@ -644,7 +680,7 @@ function resolveValidatedSlipExtension(uploadedFile) {
 
 app.post(
   "/api/payments/:id/payout",
-  verifyToken(["admin", "owner"]),
+  verifyToken(["admin"]), guardRecord(true, ["completed"]),
   upload.single("file"),
   async (req, res) => {
     try {

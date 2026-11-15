@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import 'package:rentspace/services/api_client.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:rentspace/controllers/auth_controller.dart';
@@ -17,14 +18,17 @@ void main() {
   late String tokenOwner;
   late String tokenAdmin;
 
-  setUp(() {
-    // JWT Token จริงที่ได้จาก API (/api/login) ของ Backend
-    tokenRenter =
-        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MTAwMiwidXNlcl9pZCI6MTAwMiwidXNlcm5hbWUiOiJyZW50ZXIwMSIsImVtYWlsIjoicmVudGVyMDFAcmVudHNwYWNlLnRlc3QiLCJyb2xlIjoicmVudGVyIiwiZGJSb2xlIjoiY3VzdG9tZXIiLCJpYXQiOjE3OTQ2NzgzNjQsImV4cCI6MTc5NTI4MzE2NH0.0v4vnBSOEVjfExaXkauw0ZIJTqJIItv7lVVMp_e4dX8';
-    tokenOwner =
-        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MTAwMSwidXNlcl9pZCI6MTAwMSwidXNlcm5hbWUiOiJvd25lcjAxIiwiZW1haWwiOiJvd25lcjAxQHJlbnRzcGFjZS50ZXN0Iiwicm9sZSI6Im93bmVyIiwiZGJSb2xlIjoib3duZXIiLCJpYXQiOjE3OTQ2NzgzNjQsImV4cCI6MTc5NTI4MzE2NH0.jwnf1_knYzRmdAuwynqR-vAu_I6HiHumFN61BRnMFdY';
-    tokenAdmin =
-        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MTAwMywidXNlcl9pZCI6MTAwMywidXNlcm5hbWUiOiJhZG1pbjAxIiwiZW1haWwiOiJhZG1pbjAxQHJlbnRzcGFjZS50ZXN0Iiwicm9sZSI6ImFkbWluIiwiZGJSb2xlIjoiYWRtaW4iLCJpYXQiOjE3OTQ2NzgzNjQsImV4cCI6MTc5NTI4MzE2NH0.Y-Jj_g7NVQXawgFkWfOm3MqegjP35ixnE4GOITQOR7g';
+  if (!const bool.fromEnvironment('RUN_LIVE_TESTS')) return;
+  setUp(() async {
+    final api = ApiClient();
+    Future<String> login(String email) async {
+      final result = await api.request('POST', '/auth/login', {'email': email, 'password': 'password'});
+      return result['token'] as String;
+    }
+    tokenRenter = await login('renter01@rentspace.test');
+    tokenOwner = await login('owner01@rentspace.test');
+    tokenAdmin = await login('admin01@rentspace.test');
+    api.client.close();
   });
 
   group('Login Test (Live Backend API)', () {

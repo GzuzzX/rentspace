@@ -8,7 +8,7 @@ try {
   argon2 = null;
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || "your_super_secret_jwt_key_here";
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(48).toString("hex");
 
 function sha256Hex(rawText) {
   return crypto.createHash("sha256").update(String(rawText)).digest("hex");
@@ -103,10 +103,16 @@ const verifyToken = (allowedRoles = []) => {
     if (!token) {
       return res.status(401).json({ error: "Access token missing" });
     }
-    jwt.verify(token, JWT_SECRET, (err, decodedUser) => {
+    jwt.verify(token, JWT_SECRET, async (err, decodedUser) => {
       if (err) {
         return res.status(401).json({ error: "Invalid or expired token" });
       }
+      try {
+        const [rows] = await require("./db_config").promise().query("SELECT role, status FROM users WHERE user_id = ?", [decodedUser.id]);
+        if (!rows.length || rows[0].status === "suspended" || rows[0].role === "disabled") return res.status(401).json({error: "Account unavailable"});
+        decodedUser.role = normalizeRoleForApp(rows[0].role);
+        decodedUser.dbRole = rows[0].role;
+      } catch (_) { return res.status(503).json({error: "Authentication unavailable"}); }
       req.user = decodedUser;
       if (roles.size > 0 && !roles.has(decodedUser.role) && !roles.has(decodedUser.dbRole)) {
         return res.status(403).json({ error: "Access denied: insufficient permissions" });

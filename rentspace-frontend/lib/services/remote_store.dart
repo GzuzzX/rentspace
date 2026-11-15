@@ -3,6 +3,10 @@ import 'dart:typed_data';
 import '../data/app_store.dart';
 import '../models/domain.dart';
 
+Uint8List? decodeImageSafely(String value) {
+  try { return base64Decode(value); } on FormatException { return null; }
+}
+
 String _str(dynamic v) => v == null ? '' : '$v';
 List<dynamic> _list(dynamic v) =>
     v is String ? jsonDecode(v) as List : (v as List? ?? []);
@@ -66,7 +70,7 @@ void applySnapshot(AppStore store, Map<String, dynamic> data) {
           ? ''
           : _resolveMediaUrl(store, rawImage),
       imageBytes: rawImage.startsWith('data:')
-          ? base64Decode(rawImage.split(',').last)
+          ? decodeImageSafely(rawImage.split(',').last)
           : null,
       amenities: List<String>.from(_list(s['amenities'])),
       status: SpaceStatus.values.byName(_str(s['status'])),
@@ -145,7 +149,7 @@ void applySnapshot(AppStore store, Map<String, dynamic> data) {
       booking.payoutSlip = PaymentSlip(
         name: payoutName.isEmpty ? 'payout_slip.jpg' : payoutName,
         bytes: payoutData.isNotEmpty
-            ? base64Decode(payoutData)
+            ? (decodeImageSafely(payoutData) ?? Uint8List(0))
             : Uint8List(0),
         submittedAt: booking.paidOutAt!,
         note: payoutNote,
@@ -161,7 +165,7 @@ void applySnapshot(AppStore store, Map<String, dynamic> data) {
         PaymentSlip(
           name: _str(s['file_name']),
           bytes: imageData.isNotEmpty
-              ? base64Decode(imageData)
+              ? (decodeImageSafely(imageData) ?? Uint8List(0))
               : Uint8List(0),
           submittedAt: _time(s['submitted_at'])!,
           note: s['note'] ?? '',

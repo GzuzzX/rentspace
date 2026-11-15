@@ -221,16 +221,19 @@ async function buildSnapshot(db, currentUserId) {
       days_count: b.days_count,
     }));
 
+  const admin = users.some(u => u.id === String(currentUserId) && u.role === "admin");
+  const visible = bookings.filter(b => admin || b.renter_id === String(currentUserId) || b.owner_id === String(currentUserId));
+  const ids = new Set(visible.map(b => b.id));
   return {
     userId: String(currentUserId),
-    users,
+    users: admin ? users : users.map(u => u.id === String(currentUserId) ? u : ({...u, email: "", phone: "", bank_info: ""})),
     favorites: favRows.map((f) => String(f.space_id)),
     spaces,
     blocks: blockRows.map(mapBlockRow),
-    bookings,
-    slips,
+    bookings: visible,
+    slips: slips.filter(s => admin || ids.has(s.booking_id)),
     reviews,
-    issues: issueRows.map((i) => ({
+    issues: issueRows.filter(i => admin || String(i.reporter_id) === String(currentUserId)).map((i) => ({
       id: String(i.id || i.issue_id),
       reporter_id: String(i.reporter_id),
       subject: i.subject,
@@ -239,7 +242,7 @@ async function buildSnapshot(db, currentUserId) {
       resolution: i.resolution || "",
     })),
     busy,
-    logs: logRows.map((l) => ({
+    logs: (admin ? logRows : []).map((l) => ({
       acted_at: toIsoDateTime(l.created_at) || new Date().toISOString(),
       actor: l.admin_name || "System",
       action: `${l.action}: ${l.details}`,

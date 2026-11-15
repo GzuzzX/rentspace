@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node app.js",
     "dev": "node --watch app.js",
-    "test": "node --test test/app.test.js"
+    "test": "node --test --test-name-pattern=\"^[123][.]|Renter snapshot\" test/app.test.js test/privacy.test.js",
+    "test:integration": "node --test test/app.test.js"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.0.2",
