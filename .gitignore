@@ -4,3 +4,6 @@ node_modules/
 !.env.example
 *.log
 .DS_Store
+backend/uploads/slip_*
+backend/uploads/payout_*
+

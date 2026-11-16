@@ -60,43 +60,40 @@ const _dark = _Palette(
 TextTheme _textTheme(Color content) => TextTheme(
   headlineMedium: TextStyle(
     fontSize: 28,
-    height: 1.15,
+    height: 1.25,
     fontWeight: FontWeight.w800,
-    letterSpacing: -0.8,
     color: content,
   ),
   headlineSmall: TextStyle(
     fontSize: 22,
-    height: 1.2,
+    height: 1.3,
     fontWeight: FontWeight.w800,
-    letterSpacing: -0.5,
     color: content,
   ),
   titleLarge: TextStyle(
     fontSize: 20,
-    height: 1.25,
+    height: 1.35,
     fontWeight: FontWeight.w700,
-    letterSpacing: -0.3,
     color: content,
   ),
   titleMedium: TextStyle(
     fontSize: 16,
-    height: 1.3,
+    height: 1.4,
     fontWeight: FontWeight.w600,
     color: content,
   ),
   titleSmall: TextStyle(
     fontSize: 14,
-    height: 1.35,
+    height: 1.45,
     fontWeight: FontWeight.w600,
     color: content,
   ),
-  bodyLarge: TextStyle(fontSize: 14, height: 1.5, color: content),
-  bodyMedium: TextStyle(fontSize: 14, height: 1.5, color: content),
+  bodyLarge: TextStyle(fontSize: 14, height: 1.55, color: content),
+  bodyMedium: TextStyle(fontSize: 14, height: 1.55, color: content),
   bodySmall: TextStyle(
     fontSize: 12,
-    height: 1.45,
-    color: content.withValues(alpha: 0.6),
+    height: 1.5,
+    color: content.withValues(alpha: 0.72),
   ),
   labelLarge: TextStyle(
     fontSize: 14,
@@ -106,13 +103,12 @@ TextTheme _textTheme(Color content) => TextTheme(
   labelMedium: TextStyle(
     fontSize: 12,
     fontWeight: FontWeight.w600,
-    letterSpacing: 0.4,
-    color: content.withValues(alpha: 0.6),
+    color: content.withValues(alpha: 0.72),
   ),
   labelSmall: TextStyle(
     fontSize: 11,
     fontWeight: FontWeight.w500,
-    color: content.withValues(alpha: 0.45),
+    color: content.withValues(alpha: 0.72),
   ),
 );
 
@@ -192,7 +188,7 @@ ThemeData buildAppTheme(Brightness brightness) {
       suffixIconConstraints: const BoxConstraints(minWidth: 44, minHeight: 44),
       labelStyle: TextStyle(
         fontSize: 13,
-        color: p.content.withValues(alpha: 0.55),
+        color: p.content.withValues(alpha: 0.72),
       ),
       floatingLabelStyle: TextStyle(
         fontSize: 12,
@@ -201,16 +197,16 @@ ThemeData buildAppTheme(Brightness brightness) {
       ),
       hintStyle: TextStyle(
         fontSize: 14,
-        color: p.content.withValues(alpha: 0.4),
+        color: p.content.withValues(alpha: 0.62),
       ),
       errorStyle: TextStyle(fontSize: 12, color: p.error),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(8),
-        borderSide: BorderSide(color: p.base300),
+        borderSide: BorderSide(color: p.content.withValues(alpha: 0.5)),
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(8),
-        borderSide: BorderSide(color: p.base300),
+        borderSide: BorderSide(color: p.content.withValues(alpha: 0.5)),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(8),

@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import '../data/app_store.dart';
 import '../models/domain.dart';
+import 'payment_controller.dart';
 
 /// จัดการประกาศพื้นที่ การค้นหา เวลาทำการ รายการโปรด และรายงานปัญหาผ่าน backend API
 class SpaceController {
@@ -30,6 +31,7 @@ class SpaceController {
       capacity: capacity,
       description: description,
       image: image,
+      imageBytes: imageBytes,
     );
     final payload = _buildSpacePayload(
       id: id,
@@ -59,11 +61,16 @@ class SpaceController {
     required int capacity,
     required String description,
     required String image,
+    Uint8List? imageBytes,
   }) {
     if ([name, category, location, description].any((s) => s.trim().isEmpty) ||
         price <= 0 ||
         capacity <= 0) {
       throw DomainError('กรอกข้อมูลให้ครบ ราคาและความจุต้องมากกว่า 0');
+    }
+    if (imageBytes != null) {
+      final ext = imageBytes.length > 3 && imageBytes[0] == 137 ? 'png' : 'jpg';
+      PaymentController.validateSlip('space.$ext', imageBytes);
     }
     final trimmedImage = image.trim();
     if (trimmedImage.isNotEmpty && !trimmedImage.startsWith('/api/spaces/')) {

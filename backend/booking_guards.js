@@ -239,6 +239,33 @@ async function createBookingTransactional(db, userId, requestBody) {
   }
 }
 
+function safeGuardError(err) {
+  console.error("Booking guard error:", err && (err.message || err.code || String(err)));
+  return "เกิดข้อผิดพลาดภายในเซิร์ฟเวอร์";
+}
+
+function computeBookingEndsAt(bookingRecord) {
+  const startIso = toIsoDate(bookingRecord.start_date);
+  const daysCount = Math.max(1, Number(bookingRecord.days_count || 1));
+  const endIso = bookingRecord.end_date
+    ? toIsoDate(bookingRecord.end_date)
+    : shiftIsoDate(startIso, daysCount - 1);
+  const [ey, em, ed] = endIso.split("-").map(Number);
+  let fallbackEndMinutes = 660;
+  if (bookingRecord.end_time) {
+    const parsedEnd =
+      bookingRecord.end_time instanceof Date
+        ? bookingRecord.end_time
+        : new Date(bookingRecord.end_time);
+    if (!Number.isNaN(parsedEnd.getTime())) {
+      fallbackEndMinutes = parsedEnd.getHours() * 60 + parsedEnd.getMinutes();
+    }
+  }
+  const endMinutes =
+    bookingRecord.end_minutes != null ? Number(bookingRecord.end_minutes) : fallbackEndMinutes;
+  return new Date(ey, em - 1, ed, Math.floor(endMinutes / 60), endMinutes % 60, 0, 0);
+}
+
 function guardSpaceAccess(db) {
   return async (req, res, next) => {
     try {
@@ -254,7 +281,7 @@ function guardSpaceAccess(db) {
       req.spaceRecord = spaceRecord;
       return next();
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: safeGuardError(err) });
     }
   };
 }
@@ -305,13 +332,15 @@ function guardBookingAccess(db, options) {
       req.bookingRecord = bookingRecord;
       return next();
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: safeGuardError(err) });
     }
   };
 }
 
 module.exports = {
   createBookingTransactional,
+  computeBookingEndsAt,
+  hasBookingPermission,
   guardSpaceAccess,
   guardBookingAccess,
 };

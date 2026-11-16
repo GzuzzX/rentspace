@@ -323,8 +323,15 @@ Future<void> main() async {
         BookingStatus.slipReview,
       );
 
-      // 4) Owner ตรวจสลิปผ่าน (slipReview -> confirmed)
+      // 4) Owner ห้ามอนุมัติสลิปเอง (403) — Admin เท่านั้นที่อนุมัติสลิป (slipReview -> confirmed)
       when(() => mockTokenService.loadToken()).thenAnswer((_) async => tokenOwner);
+      await authController.restoreSessionAsync();
+      await expectLater(
+        paymentController.reviewAsync(createdBooking.id, true, ''),
+        throwsA(isA<ApiError>().having((e) => e.status, 'status', 403)),
+      );
+
+      when(() => mockTokenService.loadToken()).thenAnswer((_) async => tokenAdmin);
       await authController.restoreSessionAsync();
       await paymentController.reviewAsync(createdBooking.id, true, '');
       expect(
@@ -332,21 +339,56 @@ Future<void> main() async {
         BookingStatus.confirmed,
       );
 
-      // 5) จบงาน (complete) และ Renter เขียนรีวิว 5 ดาว
+      // 5) Renter กดจบงานไม่ได้ (403) และ Owner กดจบงานก่อน endsAt ไม่ได้ (409)
       when(() => mockTokenService.loadToken()).thenAnswer((_) async => tokenRenter);
       await authController.restoreSessionAsync();
-      await bookingController.completeAsync(createdBooking.id);
-      expect(
-        store.booking(createdBooking.id).status,
-        BookingStatus.completed,
+      await expectLater(
+        bookingController.completeAsync(createdBooking.id),
+        throwsA(isA<ApiError>().having((e) => e.status, 'status', 403)),
       );
 
-      await bookingController.submitReviewAsync(
-        createdBooking.id,
-        5,
-        'ห้องสะอาด บริการดีมาก',
+      when(() => mockTokenService.loadToken()).thenAnswer((_) async => tokenOwner);
+      await authController.restoreSessionAsync();
+      await expectLater(
+        bookingController.completeAsync(createdBooking.id),
+        throwsA(isA<ApiError>().having((e) => e.status, 'status', 409)),
       );
-      expect(store.booking(createdBooking.id).review?.rating, 5);
+
+      // จบงานรายการที่เลยเวลาสิ้นสุดแล้ว และ Renter เขียนรีวิว 5 ดาว
+      final now = DateTime.now();
+      Booking? pastConfirmed;
+      for (final b in store.bookings) {
+        if (b.ownerId == '1001' &&
+            b.status == BookingStatus.confirmed &&
+            !b.endsAt.isAfter(now)) {
+          pastConfirmed = b;
+          break;
+        }
+      }
+      if (pastConfirmed != null) {
+        await bookingController.completeAsync(pastConfirmed.id);
+        expect(
+          store.booking(pastConfirmed.id).status,
+          BookingStatus.completed,
+        );
+      }
+
+      when(() => mockTokenService.loadToken()).thenAnswer((_) async => tokenRenter);
+      await authController.restoreSessionAsync();
+      final reviewTarget = pastConfirmed ??
+          store.bookings.firstWhere(
+            (b) =>
+                b.renterId == store.currentUser!.id &&
+                b.status == BookingStatus.completed,
+          );
+      if (reviewTarget.renterId == store.currentUser!.id) {
+        await bookingController.submitReviewAsync(
+          reviewTarget.id,
+          5,
+          'ห้องสะอาด บริการดีมาก',
+        );
+        expect(store.booking(reviewTarget.id).review?.rating, 5);
+      }
     });
 
     test('10. Cancel booking with Renter token should change status to canceled', () async {
@@ -433,8 +475,15 @@ Future<void> main() async {
       await authController.restoreSessionAsync();
       await paymentController.submitAsync(bSlip.id, 'slip1.png', pngBytes, 'รอบแรก');
 
-      // Owner ปฏิเสธสลิป (slipReview -> slipRejected)
+      // Owner ปฏิเสธสลิปไม่ได้ (403) — Admin ปฏิเสธสลิป (slipReview -> slipRejected)
       when(() => mockTokenService.loadToken()).thenAnswer((_) async => tokenOwner);
+      await authController.restoreSessionAsync();
+      await expectLater(
+        paymentController.reviewAsync(bSlip.id, false, 'ยอดเงินไม่ตรง'),
+        throwsA(isA<ApiError>().having((e) => e.status, 'status', 403)),
+      );
+
+      when(() => mockTokenService.loadToken()).thenAnswer((_) async => tokenAdmin);
       await authController.restoreSessionAsync();
       await paymentController.reviewAsync(bSlip.id, false, 'ยอดเงินไม่ตรง');
       expect(store.booking(bSlip.id).status, BookingStatus.slipRejected);
@@ -446,7 +495,7 @@ Future<void> main() async {
       await paymentController.submitAsync(bSlip.id, 'slip2.png', pngBytes, 'ส่งใหม่ครบถ้วน');
       expect(store.booking(bSlip.id).status, BookingStatus.slipReview);
 
-      // Admin อนุมัติสลิป -> เจ้าของยืนยันจบงาน -> Admin โอนเงินให้เจ้าของ (Payout)
+      // Admin อนุมัติสลิป -> ตรวจจบงานก่อน endsAt (409) -> Admin โอนเงินให้เจ้าของได้ครั้งเดียว (Payout)
       when(() => mockTokenService.loadToken()).thenAnswer((_) async => tokenAdmin);
       await authController.restoreSessionAsync();
       await paymentController.reviewAsync(bSlip.id, true, '');
@@ -454,26 +503,52 @@ Future<void> main() async {
 
       when(() => mockTokenService.loadToken()).thenAnswer((_) async => tokenOwner);
       await authController.restoreSessionAsync();
-      await bookingController.completeAsync(bSlip.id);
-      expect(store.booking(bSlip.id).status, BookingStatus.completed);
+      await expectLater(
+        bookingController.completeAsync(bSlip.id),
+        throwsA(isA<ApiError>().having((e) => e.status, 'status', 409)),
+      );
 
       when(() => mockTokenService.loadToken()).thenAnswer((_) async => tokenAdmin);
       await authController.restoreSessionAsync();
-      await paymentController.payoutAsync(bSlip.id);
-      expect(store.booking(bSlip.id).paidOutAt, isNotNull);
-
-      await paymentController.payoutAsync(
-        bSlip.id,
-        fileName: 'payout_slip.png',
-        bytes: pngBytes,
-        note: 'โอนเงินครบตามยอดสุทธิแล้ว',
+      await expectLater(
+        paymentController.payoutAsync(bSlip.id),
+        throwsA(isA<ApiError>().having((e) => e.status, 'status', 409)),
       );
-      final paidOutBooking = store.booking(bSlip.id);
-      expect(paidOutBooking.paidOutAt, isNotNull);
-      expect(paidOutBooking.payoutSlip, isNotNull);
-      expect(paidOutBooking.payoutSlip!.name, 'payout_slip.png');
-      expect(paidOutBooking.payoutSlip!.note, 'โอนเงินครบตามยอดสุทธิแล้ว');
-      expect(paidOutBooking.payoutSlip!.imageUrl, contains('/uploads/payout_'));
+
+      Booking? unpaidCompleted;
+      for (final b in store.bookings) {
+        if (b.status == BookingStatus.completed && b.paidOutAt == null) {
+          unpaidCompleted = b;
+          break;
+        }
+      }
+      if (unpaidCompleted != null) {
+        await paymentController.payoutAsync(
+          unpaidCompleted.id,
+          fileName: 'payout_slip.png',
+          bytes: pngBytes,
+          note: 'โอนเงินครบตามยอดสุทธิแล้ว',
+        );
+        final paidOutBooking = store.booking(unpaidCompleted.id);
+        expect(paidOutBooking.paidOutAt, isNotNull);
+        expect(paidOutBooking.payoutSlip, isNotNull);
+        expect(paidOutBooking.payoutSlip!.name, 'payout_slip.png');
+        expect(paidOutBooking.payoutSlip!.note, 'โอนเงินครบตามยอดสุทธิแล้ว');
+        expect(paidOutBooking.payoutSlip!.imageUrl, contains('/uploads/payout_'));
+
+        await expectLater(
+          paymentController.payoutAsync(unpaidCompleted.id),
+          throwsA(isA<ApiError>().having((e) => e.status, 'status', 409)),
+        );
+      } else {
+        final alreadyPaid = store.bookings.firstWhere(
+          (b) => b.status == BookingStatus.completed && b.paidOutAt != null,
+        );
+        await expectLater(
+          paymentController.payoutAsync(alreadyPaid.id),
+          throwsA(isA<ApiError>().having((e) => e.status, 'status', 409)),
+        );
+      }
     });
   });
 

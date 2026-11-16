@@ -8,10 +8,35 @@ try {
   argon2 = null;
 }
 
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
+if (IS_PRODUCTION && !process.env.JWT_SECRET) {
+  throw new Error("JWT_SECRET must be set when NODE_ENV=production");
+}
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(48).toString("hex");
+const revokedTokens = new Map();
 
 function sha256Hex(rawText) {
   return crypto.createHash("sha256").update(String(rawText)).digest("hex");
+}
+
+function pruneRevokedTokens(nowSeconds) {
+  for (const [tokenHash, expiresAt] of revokedTokens) {
+    if (expiresAt <= nowSeconds) revokedTokens.delete(tokenHash);
+  }
+}
+
+function revokeToken(rawToken) {
+  if (!rawToken) return;
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const decoded = jwt.decode(rawToken);
+  const expiresAt = decoded && Number(decoded.exp) ? Number(decoded.exp) : nowSeconds + 7 * 86400;
+  pruneRevokedTokens(nowSeconds);
+  revokedTokens.set(sha256Hex(rawToken), expiresAt);
+}
+
+function isTokenRevoked(rawToken) {
+  if (!rawToken) return true;
+  return revokedTokens.has(sha256Hex(rawToken));
 }
 
 function hashPassword(plainPassword) {
@@ -53,7 +78,12 @@ function verifyPassword(storedHash, plainPassword) {
       return false;
     }
   }
-  return storedHash === sha256Hex(text) || storedHash === text;
+  if (/^[a-f0-9]{64}$/i.test(storedHash)) {
+    const expected = Buffer.from(storedHash.toLowerCase(), "hex");
+    const actual = Buffer.from(sha256Hex(text), "hex");
+    return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+  }
+  return false;
 }
 
 function normalizeRoleForApp(dbRole) {
@@ -77,7 +107,7 @@ function signToken(userRow) {
     role: normalizeRoleForApp(userRow.role),
     dbRole: userRow.role,
   };
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: "7d", jwtid: crypto.randomUUID() });
 }
 
 function expandAllowedRoles(allowedRoles) {
@@ -139,10 +169,14 @@ const verifyToken = (allowedRoles = []) => {
     if (!token) {
       return res.status(401).json({ error: "Access token missing" });
     }
+    if (isTokenRevoked(token)) {
+      return res.status(401).json({ error: "Invalid or expired token" });
+    }
     jwt.verify(token, JWT_SECRET, (err, decodedUser) => {
       if (err) {
         return res.status(401).json({ error: "Invalid or expired token" });
       }
+      req.rawToken = token;
       void authorizeDecodedToken(decodedUser, roles, req, res, next);
     });
   };
@@ -153,6 +187,8 @@ module.exports = {
   sha256Hex,
   hashPassword,
   verifyPassword,
+  revokeToken,
+  isTokenRevoked,
   normalizeRoleForApp,
   normalizeRoleForDb,
   signToken,

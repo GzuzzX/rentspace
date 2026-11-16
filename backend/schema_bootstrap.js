@@ -94,6 +94,7 @@ async function ensureColumns(db) {
       await db.query(`ALTER TABLE \`${item.table}\` ADD COLUMN \`${item.column}\` ${item.def}`);
     }
   }
+  await db.query("ALTER TABLE `spaces` MODIFY COLUMN `image_url` LONGTEXT DEFAULT NULL");
 }
 
 async function ensureDemoPasswords(db) {

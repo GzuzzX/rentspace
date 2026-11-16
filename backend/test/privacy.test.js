@@ -1,6 +1,18 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { buildSnapshot } = require("../snapshot_builder");
+const {
+  hashPassword,
+  verifyPassword,
+  signToken,
+  revokeToken,
+  isTokenRevoked,
+} = require("../auth_security");
+const {
+  computeBookingEndsAt,
+  hasBookingPermission,
+  guardBookingAccess,
+} = require("../booking_guards");
 
 function createFixtureDatabase() {
   const tables = {
@@ -161,4 +173,106 @@ test("2. Admin snapshot receives full users, bookings, slips, issues, and audit 
   assert.equal(snapshot.slips.length, 2);
   assert.equal(snapshot.issues.length, 2);
   assert.equal(snapshot.logs.length, 1);
+});
+
+test("3. Auth security rejects plaintext hashes, revokes logged-out tokens, and preserves +07:00 block fallback", () => {
+  assert.equal(verifyPassword("password", "password"), false);
+  const hashed = hashPassword("ValidPass123!");
+  assert.equal(verifyPassword(hashed, "ValidPass123!"), true);
+  assert.equal(verifyPassword(hashed, "WrongPass123!"), false);
+
+  const token = signToken({
+    user_id: 1002,
+    username: "renter01",
+    email: "renter01@rentspace.test",
+    role: "customer",
+  });
+  assert.equal(isTokenRevoked(token), false);
+  revokeToken(token);
+  assert.equal(isTokenRevoked(token), true);
+
+  const sameSecondToken = signToken({
+    user_id: 1002,
+    username: "renter01",
+    email: "renter01@rentspace.test",
+    role: "customer",
+  });
+  assert.notEqual(sameSecondToken, token);
+  assert.equal(isTokenRevoked(sameSecondToken), false);
+});
+
+test("4. Booking guards enforce admin-only slip review, owner/admin complete after endsAt, and endsAt calculation", async () => {
+  const sampleBooking = {
+    booking_id: 3901,
+    customer_id: 1002,
+    space_owner_id: 1001,
+    start_date: "2026-11-16",
+    end_date: "2026-11-18",
+    days_count: 3,
+    end_minutes: 720,
+    status: "confirmed",
+    app_status: "confirmed",
+  };
+  const endsAt = computeBookingEndsAt(sampleBooking);
+  assert.equal(endsAt.getFullYear(), 2026);
+  assert.equal(endsAt.getMonth(), 10);
+  assert.equal(endsAt.getDate(), 18);
+  assert.equal(endsAt.getHours(), 12);
+  assert.equal(endsAt.getMinutes(), 0);
+
+  const midnightBooking = {
+    start_date: "2026-11-16",
+    days_count: 1,
+    end_minutes: 1440,
+  };
+  const midnightEnd = computeBookingEndsAt(midnightBooking);
+  assert.equal(midnightEnd.getDate(), 17);
+  assert.equal(midnightEnd.getHours(), 0);
+
+  // Role permissions
+  assert.equal(hasBookingPermission({ id: 1001, role: "owner" }, sampleBooking, "admin"), false);
+  assert.equal(hasBookingPermission({ id: 1003, role: "admin" }, sampleBooking, "admin"), true);
+  assert.equal(hasBookingPermission({ id: 1002, role: "renter" }, sampleBooking, "ownerOrAdmin"), false);
+  assert.equal(hasBookingPermission({ id: 1001, role: "owner" }, sampleBooking, "ownerOrAdmin"), true);
+  assert.equal(hasBookingPermission({ id: 1003, role: "admin" }, sampleBooking, "ownerOrAdmin"), true);
+
+  // guardBookingAccess rejects non-admin for admin-only route with 403
+  const mockDb = {
+    async query() {
+      return [[{ ...sampleBooking, app_status: "slipReview" }]];
+    },
+  };
+  const adminGuard = guardBookingAccess(mockDb, {
+    access: "admin",
+    allowedStatuses: ["slipReview"],
+  });
+  let statusCode = null;
+  let nextCalled = false;
+  await adminGuard(
+    { params: { id: "3901" }, user: { id: 1001, role: "owner" } },
+    {
+      status(code) {
+        statusCode = code;
+        return { json() {} };
+      },
+    },
+    () => {
+      nextCalled = true;
+    }
+  );
+  assert.equal(statusCode, 403);
+  assert.equal(nextCalled, false);
+
+  await adminGuard(
+    { params: { id: "3901" }, user: { id: 1003, role: "admin" } },
+    {
+      status() {
+        return { json() {} };
+      },
+    },
+    () => {
+      nextCalled = true;
+    }
+  );
+  assert.equal(nextCalled, true);
 });

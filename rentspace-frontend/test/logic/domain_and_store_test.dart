@@ -774,6 +774,36 @@ void main() {
       expect(store.booking('3901').reasonKind, ReasonKind.ownerRejected);
       expect(store.booking('3902').reasonKind, ReasonKind.canceledByUser);
       expect(store.booking('3903').reasonKind, ReasonKind.expiredBySystem);
+
+      // UTC timestamps from backend are normalized to local time
+      final utcSnapshot = Map<String, dynamic>.from(_sampleSnapshotMap());
+      utcSnapshot['bookings'] = [
+        {
+          'id': 3904,
+          'space_id': 2001,
+          'owner_id': 1001,
+          'renter_id': 1002,
+          'space_name': 'ห้องอารีย์',
+          'booking_date': '2026-11-22',
+          'start_minutes': 600,
+          'end_minutes': 720,
+          'rent_amount': 400,
+          'days_count': 1,
+          'attendees': 2,
+          'zone': 'โซนหลัก',
+          'status': 'owner_review',
+          'created_at': '2026-11-16T02:30:00.000Z',
+        },
+      ];
+      applySnapshot(store, utcSnapshot);
+      expect(store.booking('3904').createdAt?.isUtc, isFalse);
+
+      final orphanSnapshot = Map<String, dynamic>.from(_sampleSnapshotMap());
+      orphanSnapshot['userId'] = 9999;
+      expect(
+        () => applySnapshot(store, orphanSnapshot),
+        throwsA(isA<DomainError>()),
+      );
     });
   });
 
@@ -908,6 +938,8 @@ void main() {
         lightTheme.scaffoldBackgroundColor != darkTheme.scaffoldBackgroundColor,
         isTrue,
       );
+      expect(lightTheme.textTheme.headlineMedium?.letterSpacing, isNull);
+      expect(lightTheme.textTheme.labelMedium?.letterSpacing, isNull);
     });
   });
 }

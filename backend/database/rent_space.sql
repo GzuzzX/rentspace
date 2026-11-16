@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS `spaces` (
   `price_per_day` decimal(10,2) NOT NULL,
   `category` varchar(50) DEFAULT 'meeting_room',
   `capacity` int(11) DEFAULT 10,
-  `image_url` text DEFAULT NULL,
+  `image_url` longtext DEFAULT NULL,
   `is_active` tinyint(1) NOT NULL DEFAULT 1,
   `rating` decimal(3,2) NOT NULL DEFAULT 4.80,
   `rating_count` int(11) NOT NULL DEFAULT 1,
@@ -166,6 +166,10 @@ CREATE TABLE IF NOT EXISTS `bookings` (
   `confirmed_at` datetime DEFAULT NULL,
   `completed_at` datetime DEFAULT NULL,
   `paid_out_at` datetime DEFAULT NULL,
+  `payout_slip_name` varchar(255) DEFAULT NULL,
+  `payout_slip_url` text DEFAULT NULL,
+  `payout_slip_data` longtext DEFAULT NULL,
+  `payout_note` text DEFAULT NULL,
   PRIMARY KEY (`booking_id`),
   KEY `space_id` (`space_id`),
   KEY `customer_id` (`customer_id`),
@@ -179,7 +183,8 @@ INSERT INTO `bookings` (`booking_id`, `space_id`, `customer_id`, `start_date`, `
 (3003, 2005, 1002, '2026-12-10', '2026-12-12', NULL, NULL, NULL, 'cancelled', 0, NULL, NULL, NULL, NULL, '2026-11-05 07:54:23'),
 (3004, 2007, 1005, '2026-12-11', '2026-12-12', NULL, NULL, NULL, 'rejected', 0, NULL, NULL, NULL, NULL, '2026-11-05 08:21:29'),
 (3006, 2008, 1001, '2026-12-14', '2026-12-15', NULL, NULL, NULL, 'cancelled', 0, NULL, NULL, NULL, NULL, '2026-11-05 08:24:12'),
-(3007, 2008, 1002, '2026-12-10', '2026-12-12', NULL, NULL, NULL, 'cancelled', 0, NULL, NULL, NULL, NULL, '2026-11-05 10:37:38');
+(3007, 2008, 1002, '2026-12-10', '2026-12-12', NULL, NULL, NULL, 'cancelled', 0, NULL, NULL, NULL, NULL, '2026-11-05 10:37:38'),
+(3008, 2001, 1002, '2026-11-10', '2026-11-10', '2026-11-10 09:00:00', '2026-11-10 11:00:00', 700.00, 'completed', 1, 'SLIP-3008-A', 'http://localhost:3000/uploads/meeting.jpg', NULL, NULL, '2026-11-05 11:00:00');
 
 -- --------------------------------------------------------
 -- Table structure for table `payments`
@@ -301,7 +306,7 @@ CREATE TABLE IF NOT EXISTS `room_blocks` (
   KEY `fk_room_blocks_user` (`created_by`),
   CONSTRAINT `fk_room_blocks_space` FOREIGN KEY (`space_id`) REFERENCES `spaces` (`space_id`) ON DELETE CASCADE,
   CONSTRAINT `fk_room_blocks_user` FOREIGN KEY (`created_by`) REFERENCES `users` (`user_id`),
-  CONSTRAINT `chk_room_blocks_dates` CHECK (`end_date` > `start_date`)
+  CONSTRAINT `chk_room_blocks_dates` CHECK (`end_date` >= `start_date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------

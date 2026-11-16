@@ -132,12 +132,17 @@ test("5. Live HTTP + MySQL integration: Admin multipart payout slip upload & /ap
        FROM bookings b
        JOIN spaces s ON s.space_id = b.space_id
        WHERE s.owner_id = 1001 AND (b.app_status = 'completed' OR b.status = 'completed')
-       ORDER BY b.booking_id ASC
+       ORDER BY (b.paid_out_at IS NULL) DESC, b.booking_id ASC
        LIMIT 1`
     );
   assert.ok(bookingRows.length > 0, "Expected at least one completed booking owned by user 1001");
   originalBooking = bookingRows[0];
   const bookingId = String(originalBooking.booking_id);
+  if (originalBooking.paid_out_at != null) {
+    await con
+      .promise()
+      .query("UPDATE bookings SET paid_out_at = NULL WHERE booking_id = ?", [bookingId]);
+  }
 
   const adminLoginRes = await fetch(`${baseUrl}/auth/login`, {
     method: "POST",
@@ -199,6 +204,16 @@ test("5. Live HTTP + MySQL integration: Admin multipart payout slip upload & /ap
   assert.equal(updatedBooking.payout_slip_url, payoutJson.payout_slip_url);
   assert.equal(updatedBooking.payout_note, "REF-TEST-991");
   assert.ok(updatedBooking.payout_slip_data.length > 10);
+
+  const duplicatePayoutRes = await fetch(`${baseUrl}/payments/${bookingId}/payout`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${adminLoginJson.token}`,
+    },
+    body: JSON.stringify({ note: "DOUBLE-PAYOUT" }),
+  });
+  assert.equal(duplicatePayoutRes.status, 409);
 });
 
 async function loginForTest(baseUrl, email, password = "password") {
@@ -221,15 +236,20 @@ test("6. Security guards block password oracle, weak passwords, IDOR mutations, 
   let createdBookingId = null;
   let createdUserId = null;
   let firstSpaceId = null;
+  let uploadedSlipPath = null;
 
   t.after(async () => {
     const db = con.promise();
     if (createdBookingId) {
+      await db.query("DELETE FROM admin_logs WHERE target_type = 'booking' AND target_id = ?", [createdBookingId]);
       await db.query("DELETE FROM payments WHERE booking_id = ?", [createdBookingId]);
       await db.query("DELETE FROM bookings WHERE booking_id = ?", [createdBookingId]);
     }
     if (createdUserId) {
       await db.query("DELETE FROM users WHERE user_id = ?", [createdUserId]);
+    }
+    if (uploadedSlipPath && fs.existsSync(uploadedSlipPath)) {
+      fs.unlinkSync(uploadedSlipPath);
     }
     server.close();
   });
@@ -334,6 +354,55 @@ test("6. Security guards block password oracle, weak passwords, IDOR mutations, 
   });
   assert.equal(badSlipRes.status, 400);
 
+  const validPng = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64"
+  );
+  const validSlipForm = new FormData();
+  validSlipForm.append("file", new Blob([validPng], { type: "image/png" }), "guard_slip.png");
+  const uploadSlipRes = await fetch(`${baseUrl}/payments/${createdBookingId}/slip`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${renterAuth.token}` },
+    body: validSlipForm,
+  });
+  assert.equal(uploadSlipRes.status, 201);
+  const uploadSlipJson = await uploadSlipRes.json();
+  if (uploadSlipJson.image_url) {
+    uploadedSlipPath = path.join(__dirname, "..", "uploads", path.basename(uploadSlipJson.image_url));
+  }
+
+  const ownerReviewSlipRes = await fetch(`${baseUrl}/payments/${createdBookingId}/review`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${ownerAuth.token}`,
+    },
+    body: JSON.stringify({ approve: true, reason: "" }),
+  });
+  assert.equal(ownerReviewSlipRes.status, 403);
+
+  const adminReviewSlipRes = await fetch(`${baseUrl}/payments/${createdBookingId}/review`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${adminAuth.token}`,
+    },
+    body: JSON.stringify({ approve: true, reason: "" }),
+  });
+  assert.equal(adminReviewSlipRes.status, 200);
+
+  const renterCompleteRes = await fetch(`${baseUrl}/bookings/${createdBookingId}/complete`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${renterAuth.token}` },
+  });
+  assert.equal(renterCompleteRes.status, 403);
+
+  const earlyCompleteRes = await fetch(`${baseUrl}/bookings/${createdBookingId}/complete`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${ownerAuth.token}` },
+  });
+  assert.equal(earlyCompleteRes.status, 409);
+
   const strangerStateRes = await fetch(`${baseUrl}/state`, {
     headers: { Authorization: `Bearer ${strangerAuth.token}` },
   });
@@ -349,6 +418,18 @@ test("6. Security guards block password oracle, weak passwords, IDOR mutations, 
     strangerState.busy.some((slot) => String(slot.space_id) === firstSpaceId && slot.booking_date === "2031-07-07"),
     true
   );
+
+  await con
+    .promise()
+    .query(
+      "UPDATE bookings SET start_date = '2020-01-01', end_date = '2020-01-01', start_time = '2020-01-01 09:00:00', end_time = '2020-01-01 11:00:00' WHERE booking_id = ?",
+      [createdBookingId]
+    );
+  const pastCompleteRes = await fetch(`${baseUrl}/bookings/${createdBookingId}/complete`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${ownerAuth.token}` },
+  });
+  assert.equal(pastCompleteRes.status, 200);
 });
 
 test("7. Transactional booking rejects overlaps, out-of-hours, excess capacity, and client end_date tampering", async (t) => {

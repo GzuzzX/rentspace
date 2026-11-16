@@ -19,7 +19,7 @@ class PaymentController {
   ) async {
     validateSlip(name, bytes);
     await _store.api.upload('/payments/$id/slip', name, bytes, note.trim());
-    await _store.refresh();
+    await _refreshAfterUpload();
   }
 
   Future<void> reviewAsync(String id, bool approve, String reason) async {
@@ -49,7 +49,7 @@ class PaymentController {
         resolvedBytes,
         trimmedNote,
       );
-      await _store.refresh();
+      await _refreshAfterUpload();
       return;
     }
     await _store.mutate(
@@ -57,6 +57,16 @@ class PaymentController {
       '/payments/$id/payout',
       trimmedNote.isEmpty ? null : {'note': trimmedNote},
     );
+  }
+
+  Future<void> _refreshAfterUpload() async {
+    try {
+      await _store.refresh();
+    } on DomainError {
+      throw DomainError(
+        'บันทึกแล้ว แต่โหลดข้อมูลล่าสุดไม่ได้ กรุณารีเฟรชก่อนทำรายการซ้ำ',
+      );
+    }
   }
 
   static void validateSlip(String name, Uint8List bytes) {

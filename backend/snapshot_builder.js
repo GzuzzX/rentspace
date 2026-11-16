@@ -142,10 +142,10 @@ function mapBookingRow(row, spaceById) {
 function mapBlockRow(row) {
   const startIso = row.start_at
     ? toIsoDateTime(row.start_at)
-    : `${toIsoDate(row.start_date)}T00:00:00.000Z`;
+    : `${toIsoDate(row.start_date)}T00:00:00.000+07:00`;
   const endIso = row.end_at
     ? toIsoDateTime(row.end_at)
-    : `${toIsoDate(row.end_date)}T23:59:00.000Z`;
+    : `${toIsoDate(row.end_date)}T23:59:00.000+07:00`;
   return {
     id: String(row.block_id),
     space_id: String(row.space_id),

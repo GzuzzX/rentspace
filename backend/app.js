@@ -1,3 +1,4 @@
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const express = require("express");
@@ -7,6 +8,7 @@ const con = require("./db_config");
 const {
   hashPassword,
   verifyPassword,
+  revokeToken,
   normalizeRoleForApp,
   normalizeRoleForDb,
   signToken,
@@ -16,6 +18,7 @@ const { DEFAULT_WEEK_HOURS, ensureSchema } = require("./schema_bootstrap");
 const { toIsoDate, buildSnapshot } = require("./snapshot_builder");
 const {
   createBookingTransactional,
+  computeBookingEndsAt,
   guardSpaceAccess,
   guardBookingAccess,
 } = require("./booking_guards");
@@ -55,10 +58,42 @@ app.use(async (_req, _res, next) => {
   try {
     await initDatabaseOnce();
   } catch (err) {
-    console.warn("Schema auto-check warning:", err.message);
+    console.warn("Schema auto-check warning:", err.message || err.code || String(err));
   }
   next();
 });
+
+function safeErrorMessage(err) {
+  console.error("Unhandled route error:", err && (err.message || err.code || String(err)));
+  return "เกิดข้อผิดพลาดภายในเซิร์ฟเวอร์";
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
+}
+
+function isSafeImageInput(rawUrl) {
+  const clean = String(rawUrl || "").trim();
+  if (!clean) return true;
+  if (clean.startsWith("data:image/png;base64,") || clean.startsWith("data:image/jpeg;base64,")) {
+    return clean.length <= 8 * 1024 * 1024;
+  }
+  if (clean.startsWith("/uploads/") || clean.startsWith("/api/spaces/")) return true;
+  return /^https?:\/\/[^\s<>"]+$/i.test(clean);
+}
+
+function isValidHoursList(days) {
+  return (
+    Array.isArray(days) &&
+    days.length === 7 &&
+    days.every((d) => {
+      if (!d || typeof d !== "object") return false;
+      const start = Number(d.start);
+      const end = Number(d.end);
+      return Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end <= 1440 && start < end;
+    })
+  );
+}
 
 async function recordAdminLog(actorId, actorName, action, targetType, targetId, details) {
   await db.query(
@@ -75,7 +110,7 @@ app.get("/api/health", async (_req, res) => {
     const [rows] = await db.query("SELECT DATABASE() AS database_name");
     return res.json({ ok: true, database: rows[0].database_name });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
@@ -88,7 +123,7 @@ app.get("/api/state", verifyToken(), async (req, res) => {
     const snapshot = await buildSnapshot(db, req.user.id);
     return res.json(snapshot);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
@@ -133,7 +168,7 @@ async function handleLogin(req, res) {
       },
     });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 }
 
@@ -180,7 +215,7 @@ async function handleRegister(req, res) {
       },
     });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 }
 
@@ -202,11 +237,12 @@ app.get("/api/auth/me", verifyToken(), async (req, res) => {
       role: normalizeRoleForApp(u.role),
     });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
-app.post("/api/auth/logout", verifyToken(), (_req, res) => {
+app.post("/api/auth/logout", verifyToken(), (req, res) => {
+  revokeToken(req.rawToken);
   return res.json({ ok: true });
 });
 
@@ -216,8 +252,15 @@ app.put("/api/auth/profile", verifyToken(), async (req, res) => {
     const email = String(req.body.email || "").trim();
     const phone = String(req.body.phone || "").trim();
     const bankInfo = req.body.bankInfo != null ? String(req.body.bankInfo).trim() : "";
-    if (!name || !email) {
-      return res.status(400).json({ error: "กรุณาระบุชื่อและอีเมล" });
+    if (!name || !isValidEmail(email)) {
+      return res.status(400).json({ error: "กรุณาระบุชื่อและอีเมลที่ถูกต้อง" });
+    }
+    const [dup] = await db.query(
+      "SELECT user_id FROM users WHERE email = ? AND user_id <> ? LIMIT 1",
+      [email, req.user.id]
+    );
+    if (dup.length > 0) {
+      return res.status(409).json({ error: "อีเมลนี้ถูกใช้งานแล้ว" });
     }
     await db.query(
       "UPDATE users SET name = ?, email = ?, phone = ?, bank_info = ? WHERE user_id = ?",
@@ -225,7 +268,7 @@ app.put("/api/auth/profile", verifyToken(), async (req, res) => {
     );
     return res.json({ ok: true });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
@@ -246,7 +289,7 @@ app.put("/api/auth/password", verifyToken(), async (req, res) => {
     ]);
     return res.json({ ok: true });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
@@ -254,10 +297,14 @@ app.put("/api/auth/password", verifyToken(), async (req, res) => {
 
 app.get("/api/spaces", async (_req, res) => {
   try {
-    const [rows] = await db.query("SELECT * FROM spaces ORDER BY space_id DESC");
+    const [rows] = await db.query(
+      `SELECT space_id, owner_id, title, description, location, price_per_day, category, capacity,
+              image_url, rating, rating_count, status
+       FROM spaces WHERE status = 'approved' ORDER BY space_id DESC`
+    );
     return res.json(rows);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
@@ -290,8 +337,11 @@ app.post("/api/spaces", verifyToken(["owner", "admin"]), async (req, res) => {
     const amenities = Array.isArray(req.body.amenities) ? req.body.amenities : [];
     const hoursJson = req.body.hours ? JSON.stringify(req.body.hours) : DEFAULT_WEEK_HOURS;
 
-    if (!title || !location || price <= 0) {
-      return res.status(400).json({ error: "กรอกข้อมูลพื้นที่และราคาให้ครบถ้วน" });
+    if (!title || !location || !Number.isFinite(price) || price <= 0 || !Number.isInteger(capacity) || capacity <= 0) {
+      return res.status(400).json({ error: "กรอกข้อมูลพื้นที่ ราคา และความจุให้ครบถ้วน" });
+    }
+    if (!isSafeImageInput(imageUrl)) {
+      return res.status(400).json({ error: "รูปแบบลิงก์หรือไฟล์รูปภาพไม่ถูกต้อง" });
     }
     const [ins] = await db.query(
       `INSERT INTO spaces (owner_id, title, description, location, price_per_day, category, capacity, image_url, hours_json, amenities_json, status)
@@ -312,7 +362,7 @@ app.post("/api/spaces", verifyToken(["owner", "admin"]), async (req, res) => {
     await syncSpaceAmenities(ins.insertId, amenities);
     return res.status(201).json({ id: String(ins.insertId), space_id: ins.insertId, status: "pending" });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
@@ -337,16 +387,25 @@ function parseAvailabilityBlocks(rawBlocks) {
 app.put("/api/spaces/:id", verifyToken(["owner", "admin"]), guardSpaceAccess(db), async (req, res) => {
   try {
     const spaceId = req.params.id;
-    const title = String(req.body.name || req.body.title || "").trim();
-    const category = String(req.body.category || "ห้องประชุม").trim();
-    const location = String(req.body.location || "").trim();
-    const price = Number(req.body.price || req.body.price_per_day || 0);
-    const capacity = Number(req.body.capacity || 10);
-    const description = String(req.body.description || "").trim();
-    const imageUrl = String(req.body.image || req.body.image_url || "").trim();
+    const existing = req.spaceRecord || {};
+    const title = String(req.body.name ?? req.body.title ?? existing.title ?? "").trim();
+    const category = String(req.body.category ?? existing.category ?? "ห้องประชุม").trim();
+    const location = String(req.body.location ?? existing.location ?? "").trim();
+    const rawPrice = req.body.price ?? req.body.price_per_day ?? existing.price_per_day ?? 0;
+    const price = Number(rawPrice);
+    const rawCapacity = req.body.capacity ?? existing.capacity ?? 10;
+    const capacity = Number(rawCapacity);
+    const description = String(req.body.description ?? existing.description ?? "").trim();
+    const imageUrl = String(req.body.image ?? req.body.image_url ?? existing.image_url ?? "").trim();
     const amenities = Array.isArray(req.body.amenities) ? req.body.amenities : [];
-    const hoursJson = req.body.hours ? JSON.stringify(req.body.hours) : DEFAULT_WEEK_HOURS;
+    const hoursJson = req.body.hours ? JSON.stringify(req.body.hours) : existing.hours_json || DEFAULT_WEEK_HOURS;
 
+    if (!title || !location || !Number.isFinite(price) || price <= 0 || !Number.isInteger(capacity) || capacity <= 0) {
+      return res.status(400).json({ error: "กรอกข้อมูลพื้นที่ ราคา และความจุให้ครบถ้วน" });
+    }
+    if (!isSafeImageInput(imageUrl)) {
+      return res.status(400).json({ error: "รูปแบบลิงก์หรือไฟล์รูปภาพไม่ถูกต้อง" });
+    }
     const requireModeration = req.user.role !== "admin";
     await db.query(
       `UPDATE spaces
@@ -357,7 +416,7 @@ app.put("/api/spaces/:id", verifyToken(["owner", "admin"]), guardSpaceAccess(db)
     await syncSpaceAmenities(spaceId, amenities);
     return res.json({ id: String(spaceId), ok: true });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
@@ -366,19 +425,25 @@ app.put(
   verifyToken(["owner", "admin"]),
   guardSpaceAccess(db),
   async (req, res) => {
+    let connection = null;
     try {
       const spaceId = req.params.id;
       const days = Array.isArray(req.body.days) ? req.body.days : JSON.parse(DEFAULT_WEEK_HOURS);
+      if (!isValidHoursList(days)) {
+        return res.status(400).json({ error: "เวลาเปิดปิดของแต่ละวันไม่ถูกต้อง" });
+      }
       const parsedBlocks = parseAvailabilityBlocks(req.body.blocks);
       if (parsedBlocks.includes(null)) {
         return res.status(400).json({ error: "ช่วงเวลาปิดห้องไม่ถูกต้อง" });
       }
 
-      await db.query("UPDATE spaces SET hours_json = ? WHERE space_id = ?", [JSON.stringify(days), spaceId]);
-      await db.query("DELETE FROM room_blocks WHERE space_id = ?", [spaceId]);
+      connection = await db.getConnection();
+      await connection.beginTransaction();
+      await connection.query("UPDATE spaces SET hours_json = ? WHERE space_id = ?", [JSON.stringify(days), spaceId]);
+      await connection.query("DELETE FROM room_blocks WHERE space_id = ?", [spaceId]);
 
       for (const parsedBlock of parsedBlocks) {
-        await db.query(
+        await connection.query(
           `INSERT INTO room_blocks (space_id, created_by, start_date, end_date, start_at, end_at, reason)
            VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [
@@ -392,9 +457,15 @@ app.put(
           ]
         );
       }
+      await connection.commit();
       return res.json({ ok: true });
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      if (connection) {
+        await connection.rollback().catch(() => {});
+      }
+      return res.status(500).json({ error: safeErrorMessage(err) });
+    } finally {
+      if (connection) connection.release();
     }
   }
 );
@@ -413,7 +484,7 @@ app.post("/api/spaces/:id/favorite", verifyToken(), async (req, res) => {
     }
     return res.json({ ok: true });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
@@ -427,7 +498,7 @@ app.get("/api/spaces/:spaceId/availability", async (req, res) => {
     const [blocks] = await db.query("SELECT * FROM room_blocks WHERE space_id = ?", [spaceId]);
     return res.json({ bookings, blocks });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
@@ -451,7 +522,7 @@ app.get("/api/bookings", verifyToken(), async (req, res) => {
     ]);
     return res.json(rows);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
@@ -460,7 +531,7 @@ app.post("/api/bookings", verifyToken("renter"), async (req, res) => {
     const bookingOutcome = await createBookingTransactional(db, req.user.id, req.body);
     return res.status(bookingOutcome.status).json(bookingOutcome.body);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
@@ -476,7 +547,7 @@ app.post(
       );
       return res.json({ ok: true });
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: safeErrorMessage(err) });
     }
   }
 );
@@ -494,7 +565,7 @@ app.post(
       );
       return res.json({ ok: true });
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: safeErrorMessage(err) });
     }
   }
 );
@@ -516,24 +587,28 @@ app.post(
       );
       return res.json({ ok: true });
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: safeErrorMessage(err) });
     }
   }
 );
 
 app.post(
   "/api/bookings/:id/complete",
-  verifyToken(),
-  guardBookingAccess(db, { access: "participantOrAdmin", allowedStatuses: ["confirmed"] }),
+  verifyToken(["owner", "admin"]),
+  guardBookingAccess(db, { access: "ownerOrAdmin", allowedStatuses: ["confirmed"] }),
   async (req, res) => {
     try {
+      const endsAt = computeBookingEndsAt(req.bookingRecord);
+      if (Date.now() < endsAt.getTime()) {
+        return res.status(409).json({ error: "ยังไม่ถึงเวลาสิ้นสุดการจอง" });
+      }
       await db.query(
         "UPDATE bookings SET status = 'completed', app_status = 'completed', completed_at = NOW() WHERE booking_id = ?",
         [req.params.id]
       );
       return res.json({ ok: true });
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: safeErrorMessage(err) });
     }
   }
 );
@@ -545,7 +620,11 @@ app.post(
   async (req, res) => {
     try {
       const bookingId = req.params.id;
-      const rating = Math.min(5, Math.max(1, Number(req.body.rating || 5)));
+      const rawRating = req.body.rating == null ? 5 : Number(req.body.rating);
+      if (!Number.isFinite(rawRating) || rawRating < 1 || rawRating > 5) {
+        return res.status(400).json({ error: "คะแนนรีวิวต้องอยู่ระหว่าง 1–5 ดาว" });
+      }
+      const rating = Math.round(rawRating);
       const comment = String(req.body.comment || req.body.review_comment || "").trim();
 
       await db.query("UPDATE bookings SET rating = ?, review_comment = ? WHERE booking_id = ?", [
@@ -559,9 +638,25 @@ app.post(
          ON DUPLICATE KEY UPDATE rating = VALUES(rating), review_comment = VALUES(review_comment)`,
         [bookingId, rating, comment]
       );
+      if (req.bookingRecord && req.bookingRecord.space_id) {
+        const spaceId = req.bookingRecord.space_id;
+        await db.query(
+          `UPDATE spaces s
+           JOIN (
+             SELECT b.space_id, ROUND(AVG(r.rating), 2) AS avg_r, COUNT(*) AS cnt_r
+             FROM reviews r
+             JOIN bookings b ON b.booking_id = r.booking_id
+             WHERE b.space_id = ?
+             GROUP BY b.space_id
+           ) stats ON stats.space_id = s.space_id
+           SET s.rating = stats.avg_r, s.rating_count = stats.cnt_r
+           WHERE s.space_id = ?`,
+          [spaceId, spaceId]
+        );
+      }
       return res.status(201).json({ ok: true });
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: safeErrorMessage(err) });
     }
   }
 );
@@ -603,15 +698,15 @@ app.post(
       ]);
       return res.status(201).json({ ok: true, image_url: imageUrl });
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: safeErrorMessage(err) });
     }
   }
 );
 
 app.post(
   "/api/payments/:id/review",
-  verifyToken(["owner", "admin"]),
-  guardBookingAccess(db, { access: "ownerOrAdmin", allowedStatuses: ["slipReview"] }),
+  verifyToken("admin"),
+  guardBookingAccess(db, { access: "admin", allowedStatuses: ["slipReview"] }),
   async (req, res) => {
     try {
       const bookingId = req.params.id;
@@ -623,16 +718,19 @@ app.post(
           "UPDATE bookings SET status = 'confirmed', app_status = 'confirmed', is_paid = 1, confirmed_at = NOW(), reason = '', reason_kind = 'none' WHERE booking_id = ?",
           [bookingId]
         );
-        await db.query("UPDATE payments SET status = 'verified' WHERE booking_id = ?", [bookingId]);
+        await db.query(
+          "UPDATE payments SET status = 'verified' WHERE booking_id = ? ORDER BY payment_id DESC LIMIT 1",
+          [bookingId]
+        );
       } else {
         await db.query(
           "UPDATE bookings SET app_status = 'slipRejected', slip_rejected_at = NOW(), reason = ?, reason_kind = 'slipRejected' WHERE booking_id = ?",
           [reason, bookingId]
         );
-        await db.query("UPDATE payments SET status = 'rejected', rejection_reason = ? WHERE booking_id = ?", [
-          reason,
-          bookingId,
-        ]);
+        await db.query(
+          "UPDATE payments SET status = 'rejected', rejection_reason = ? WHERE booking_id = ? ORDER BY payment_id DESC LIMIT 1",
+          [reason, bookingId]
+        );
       }
       await recordAdminLog(
         req.user.id,
@@ -644,7 +742,7 @@ app.post(
       );
       return res.json({ ok: true });
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: safeErrorMessage(err) });
     }
   }
 );
@@ -676,8 +774,12 @@ app.post(
   guardBookingAccess(db, { access: "admin", allowedStatuses: ["completed"] }),
   upload.single("file"),
   async (req, res) => {
+    let storedFilePath = null;
     try {
       const bookingId = req.params.id;
+      if (req.bookingRecord.paid_out_at != null) {
+        return res.status(409).json({ error: "รายการนี้บันทึกจ่ายเงินให้เจ้าของแล้ว" });
+      }
       const payoutNote = String((req.body && req.body.note) || "").trim();
       const uploadedFile = req.file || null;
       let payoutSlipName = null;
@@ -690,29 +792,41 @@ app.post(
           return res.status(400).json({ error: "รองรับภาพ JPG และ PNG เท่านั้น" });
         }
         const storedName = `payout_${bookingId}_${Date.now()}${ext}`;
-        fs.writeFileSync(path.join(uploadsDir, storedName), uploadedFile.buffer);
+        storedFilePath = path.join(uploadsDir, storedName);
+        fs.writeFileSync(storedFilePath, uploadedFile.buffer);
         payoutSlipUrl = `/uploads/${storedName}`;
         payoutSlipName = path.basename(uploadedFile.originalname || storedName);
         payoutSlipData = uploadedFile.buffer.toString("base64");
       }
 
-      await db.query(
+      const [updateResult] = await db.query(
         `UPDATE bookings
          SET paid_out_at = NOW(),
              payout_slip_name = COALESCE(?, payout_slip_name),
              payout_slip_url = COALESCE(?, payout_slip_url),
              payout_slip_data = COALESCE(?, payout_slip_data),
              payout_note = ?
-         WHERE booking_id = ?`,
+         WHERE booking_id = ? AND paid_out_at IS NULL`,
         [payoutSlipName, payoutSlipUrl, payoutSlipData, payoutNote, bookingId]
       );
+      if (!updateResult || updateResult.affectedRows === 0) {
+        if (storedFilePath && fs.existsSync(storedFilePath)) {
+          fs.unlinkSync(storedFilePath);
+        }
+        return res.status(409).json({ error: "รายการนี้บันทึกจ่ายเงินให้เจ้าของแล้ว" });
+      }
       const logDetail = payoutSlipName
         ? `โอนเงินให้เจ้าของพื้นที่ (สลิป ${payoutSlipName}${payoutNote ? `: ${payoutNote}` : ""})`
         : `โอนเงินให้เจ้าของพื้นที่${payoutNote ? `: ${payoutNote}` : ""}`;
       await recordAdminLog(req.user.id, req.user.username, "PAYOUT_OWNER", "booking", bookingId, logDetail);
       return res.json({ ok: true, payout_slip_url: payoutSlipUrl || "" });
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      if (storedFilePath && fs.existsSync(storedFilePath)) {
+        try {
+          fs.unlinkSync(storedFilePath);
+        } catch (_unlinkErr) {}
+      }
+      return res.status(500).json({ error: safeErrorMessage(err) });
     }
   }
 );
@@ -724,31 +838,41 @@ app.get("/api/admin/user", verifyToken("admin"), async (_req, res) => {
     const [rows] = await db.query("SELECT user_id AS id, username, role, status FROM users WHERE role <> 'admin'");
     return res.json(rows);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
 app.patch("/api/admin/role/:id", verifyToken("admin"), async (req, res) => {
   try {
+    const userId = req.params.id;
+    const [rows] = await db.query("SELECT role, status FROM users WHERE user_id = ?", [userId]);
+    if (rows.length === 0) return res.status(404).json({ error: "ไม่พบผู้ใช้" });
+    if (rows[0].role === "admin" || Number(userId) === Number(req.user.id)) {
+      return res.status(403).json({ error: "ไม่สามารถระงับบัญชีผู้ดูแลระบบได้" });
+    }
     const newStatus = req.body.role === "disabled" ? "suspended" : "active";
-    await db.query("UPDATE users SET status = ? WHERE user_id = ?", [newStatus, req.params.id]);
+    await db.query("UPDATE users SET status = ? WHERE user_id = ?", [newStatus, userId]);
+    await recordAdminLog(req.user.id, req.user.username, "TOGGLE_USER", "user", userId, `status -> ${newStatus}`);
     return res.status(200).send("Role updated");
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
 app.put("/api/admin/users/:id/toggle", verifyToken("admin"), async (req, res) => {
   try {
     const userId = req.params.id;
-    const [rows] = await db.query("SELECT status FROM users WHERE user_id = ?", [userId]);
+    const [rows] = await db.query("SELECT role, status FROM users WHERE user_id = ?", [userId]);
     if (rows.length === 0) return res.status(404).json({ error: "ไม่พบผู้ใช้" });
+    if (rows[0].role === "admin" || Number(userId) === Number(req.user.id)) {
+      return res.status(403).json({ error: "ไม่สามารถระงับบัญชีผู้ดูแลระบบได้" });
+    }
     const nextStatus = rows[0].status === "suspended" ? "active" : "suspended";
     await db.query("UPDATE users SET status = ? WHERE user_id = ?", [nextStatus, userId]);
     await recordAdminLog(req.user.id, req.user.username, "TOGGLE_USER", "user", userId, `status -> ${nextStatus}`);
     return res.json({ ok: true, status: nextStatus });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
@@ -758,7 +882,7 @@ app.put("/api/admin/spaces/:id/approve", verifyToken("admin"), async (req, res) 
     await recordAdminLog(req.user.id, req.user.username, "APPROVE_SPACE", "space", req.params.id, "อนุมัติพื้นที่");
     return res.json({ ok: true });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
@@ -772,7 +896,7 @@ app.put("/api/admin/spaces/:id/reject", verifyToken("admin"), async (req, res) =
     await recordAdminLog(req.user.id, req.user.username, "REJECT_SPACE", "space", req.params.id, reason);
     return res.json({ ok: true });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
@@ -782,15 +906,18 @@ app.put("/api/admin/spaces/:id/activate", verifyToken("admin"), async (req, res)
     await recordAdminLog(req.user.id, req.user.username, "ACTIVATE_SPACE", "space", req.params.id, "เปิดใช้งานพื้นที่อีกครั้ง");
     return res.json({ ok: true });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
 app.post("/api/admin/issues", verifyToken(), async (req, res) => {
   try {
-    const issueId = `iss_${Date.now()}`;
-    const subject = String(req.body.subject || "แจ้งปัญหา").trim();
+    const issueId = `iss_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
+    const subject = String(req.body.subject || "แจ้งปัญหา").trim() || "แจ้งปัญหา";
     const detail = String(req.body.detail || "").trim();
+    if (!detail) {
+      return res.status(400).json({ error: "กรุณาระบุรายละเอียด" });
+    }
     await db.query("INSERT INTO issues (id, reporter_id, subject, detail) VALUES (?, ?, ?, ?)", [
       issueId,
       req.user.id,
@@ -799,7 +926,7 @@ app.post("/api/admin/issues", verifyToken(), async (req, res) => {
     ]);
     return res.status(201).json({ id: issueId, ok: true });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
@@ -810,7 +937,7 @@ app.put("/api/admin/issues/:id/close", verifyToken("admin"), async (req, res) =>
     await recordAdminLog(req.user.id, req.user.username, "CLOSE_ISSUE", "issue", 0, resolution);
     return res.json({ ok: true });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
@@ -819,7 +946,7 @@ app.get("/api/admin/logs", verifyToken("admin"), async (_req, res) => {
     const [rows] = await db.query("SELECT * FROM admin_logs ORDER BY log_id DESC LIMIT 200");
     return res.json(rows);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 

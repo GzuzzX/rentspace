@@ -18,7 +18,7 @@ List<dynamic> _list(dynamic v) =>
     v is String ? jsonDecode(v) as List : (v as List? ?? []);
 int _int(dynamic v) => v is num ? v.toInt() : int.parse('$v');
 bool _bool(dynamic v) => v == true || v == 1;
-DateTime? _time(dynamic v) => v == null ? null : DateTime.parse('$v');
+DateTime? _time(dynamic v) => v == null ? null : DateTime.parse('$v').toLocal();
 String _camel(String v) =>
     v.replaceAllMapped(RegExp(r'_([a-z])'), (m) => m[1]!.toUpperCase());
 
@@ -58,7 +58,10 @@ void applySnapshot(AppStore store, Map<String, dynamic> data) {
       )
       .toList();
   final currentId = _str(data['userId']);
-  final current = users.firstWhere((u) => u.id == currentId);
+  final current = users.firstWhere(
+    (u) => u.id == currentId,
+    orElse: () => throw DomainError('ไม่พบบัญชีผู้ใช้ปัจจุบันในข้อมูลที่โหลด'),
+  );
   current.favorites.addAll((data['favorites'] as List).map(_str));
   final spaces = (data['spaces'] as List).map((s) {
     final spaceId = _str(s['id']);

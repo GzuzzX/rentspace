@@ -675,6 +675,19 @@ void main() {
           capacity: 5,
           description: 'desc',
           amenities: [],
+          imageBytes: corruptMockImageBytes,
+        ),
+        throwsA(isA<DomainError>()),
+      );
+      await expectLater(
+        controller.saveAsync(
+          name: 'ห้อง',
+          category: 'meeting_room',
+          location: 'กทม',
+          price: 300,
+          capacity: 5,
+          description: 'desc',
+          amenities: [],
           image: 'http://evil.example.com/a.png',
         ),
         throwsA(
