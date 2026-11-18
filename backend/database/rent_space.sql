@@ -71,11 +71,11 @@ CREATE TABLE IF NOT EXISTS `spaces` (
 ) ENGINE=InnoDB AUTO_INCREMENT=2011 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 INSERT INTO `spaces` (`space_id`, `owner_id`, `title`, `description`, `location`, `price_per_day`, `category`, `capacity`, `image_url`, `is_active`, `rating`, `rating_count`, `status`, `created_at`) VALUES
-(2001, 1001, 'ห้องประชุมสว่างใจ', 'ห้องประชุมพร้อมจอสมาร์ททีวีและอินเทอร์เน็ตความเร็วสูง', '88 ซ.อารีย์ 4 พญาไท กรุงเทพฯ', 350.00, 'meeting_room', 10, 'http://localhost:3000/uploads/meeting.jpg', 1, 4.80, 2, 'approved', '2026-11-05 07:46:46'),
-(2002, 1001, 'The Quiet Nook (ห้องอ่านหนังสือ)', 'ห้องอ่านหนังสือเงียบสงบ แสงธรรมชาติ เหมาะสำหรับอ่านหนังสือหรือติวสอบ', '12 ถ.พระราม 4 ปทุมวัน กรุงเทพฯ', 120.00, 'study_room', 4, 'http://localhost:3000/uploads/study.jpg', 1, 4.90, 3, 'approved', '2026-11-05 07:46:46'),
-(2005, 1001, 'พื้นที่จัดเวิร์กช็อป', 'พื้นที่อเนกประสงค์สำหรับกิจกรรมกลุ่ม เวิร์กช็อป และสัมมนา', 'เชียงใหม่ นิมมานเหมินท์', 3200.00, 'event_space', 30, 'http://localhost:3000/uploads/meeting.jpg', 1, 4.50, 1, 'pending', '2026-11-05 07:46:46'),
-(2007, 1005, 'ห้อง thinkstation', '', 'ch', 800.00, 'meeting_room', 10, NULL, 1, 4.80, 1, 'pending', '2026-11-05 08:19:51'),
-(2008, 1001, 'ห้อง nitro', 'on you work.', 'chin', 1500.00, 'meeting_room', 10, NULL, 1, 4.80, 1, 'approved', '2026-11-05 08:23:37');
+(2001, 1001, 'ห้องประชุมสว่างใจ', 'ห้องประชุมพร้อมจอสมาร์ททีวีและอินเทอร์เน็ตความเร็วสูง', '88 ซ.อารีย์ 4 พญาไท กรุงเทพฯ', 350.00, 'ห้องประชุม', 10, '/uploads/meeting.jpg', 1, 5.00, 1, 'approved', '2026-11-05 07:46:46'),
+(2002, 1001, 'The Quiet Nook (ห้องอ่านหนังสือ)', 'ห้องอ่านหนังสือเงียบสงบ แสงธรรมชาติ เหมาะสำหรับอ่านหนังสือหรือติวสอบ', '12 ถ.พระราม 4 ปทุมวัน กรุงเทพฯ', 120.00, 'Co-working', 4, '/uploads/study.jpg', 1, 0.00, 0, 'approved', '2026-11-05 07:46:46'),
+(2005, 1001, 'พื้นที่จัดเวิร์กช็อป', 'พื้นที่อเนกประสงค์สำหรับกิจกรรมกลุ่ม เวิร์กช็อป และสัมมนา', 'เชียงใหม่ นิมมานเหมินท์', 3200.00, 'พื้นที่อีเวนต์', 30, '/uploads/meeting.jpg', 1, 0.00, 0, 'pending', '2026-11-05 07:46:46'),
+(2007, 1005, 'ห้อง thinkstation', 'ห้องประชุมพร้อมโต๊ะทำงานและอุปกรณ์มาตรฐาน', 'ch', 800.00, 'ห้องประชุม', 10, NULL, 1, 0.00, 0, 'pending', '2026-11-05 08:19:51'),
+(2008, 1001, 'ห้อง nitro', 'on you work.', 'chin', 1500.00, 'ห้องประชุม', 10, NULL, 1, 0.00, 0, 'approved', '2026-11-05 08:23:37');
 
 -- --------------------------------------------------------
 -- Table structure for table `amenities`
@@ -178,13 +178,13 @@ CREATE TABLE IF NOT EXISTS `bookings` (
 ) ENGINE=InnoDB AUTO_INCREMENT=3009 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 INSERT INTO `bookings` (`booking_id`, `space_id`, `customer_id`, `start_date`, `end_date`, `start_time`, `end_time`, `total_price`, `status`, `is_paid`, `payment_ref`, `slip_image_url`, `rating`, `review_comment`, `created_at`) VALUES
-(3001, 2001, 1002, '2026-11-15', '2026-11-15', '2026-11-15 10:00:00', '2026-11-15 12:00:00', 700.00, 'confirmed', 1, 'SLIP-3001-A', 'http://localhost:3000/uploads/meeting.jpg', 5, 'ห้องดีมาก แอร์เย็น สะอาด', '2026-11-05 07:46:46'),
-(3002, 2002, 1002, '2026-11-20', '2026-11-20', '2026-11-20 13:00:00', '2026-11-20 17:00:00', 480.00, 'confirmed', 0, NULL, NULL, NULL, NULL, '2026-11-05 07:46:46'),
+(3001, 2001, 1002, '2026-11-15', '2026-11-15', '2026-11-15 10:00:00', '2026-11-15 12:00:00', 700.00, 'confirmed', 1, 'SLIP-3001-A', '/uploads/meeting.jpg', 5, 'ห้องดีมาก แอร์เย็น สะอาด', '2026-11-05 07:46:46'),
+(3002, 2002, 1002, '2026-11-20', '2026-11-20', '2026-11-20 13:00:00', '2026-11-20 17:00:00', 480.00, 'confirmed', 1, 'SLIP-3002-A', '/uploads/study.jpg', NULL, NULL, '2026-11-05 07:46:46'),
 (3003, 2005, 1002, '2026-12-10', '2026-12-12', NULL, NULL, NULL, 'cancelled', 0, NULL, NULL, NULL, NULL, '2026-11-05 07:54:23'),
 (3004, 2007, 1005, '2026-12-11', '2026-12-12', NULL, NULL, NULL, 'rejected', 0, NULL, NULL, NULL, NULL, '2026-11-05 08:21:29'),
 (3006, 2008, 1001, '2026-12-14', '2026-12-15', NULL, NULL, NULL, 'cancelled', 0, NULL, NULL, NULL, NULL, '2026-11-05 08:24:12'),
 (3007, 2008, 1002, '2026-12-10', '2026-12-12', NULL, NULL, NULL, 'cancelled', 0, NULL, NULL, NULL, NULL, '2026-11-05 10:37:38'),
-(3008, 2001, 1002, '2026-11-10', '2026-11-10', '2026-11-10 09:00:00', '2026-11-10 11:00:00', 700.00, 'completed', 1, 'SLIP-3008-A', 'http://localhost:3000/uploads/meeting.jpg', NULL, NULL, '2026-11-05 11:00:00');
+(3008, 2001, 1002, '2026-11-10', '2026-11-10', '2026-11-10 09:00:00', '2026-11-10 11:00:00', 700.00, 'completed', 1, 'SLIP-3008-A', '/uploads/meeting.jpg', NULL, NULL, '2026-11-05 11:00:00');
 
 -- --------------------------------------------------------
 -- Table structure for table `payments`
@@ -212,13 +212,13 @@ CREATE TABLE IF NOT EXISTS `payments` (
 ) ENGINE=InnoDB AUTO_INCREMENT=8 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 INSERT INTO `payments` (`payment_id`, `booking_id`, `amount`, `payment_method`, `status`, `transaction_ref`, `slip_image_url`, `paid_at`, `created_at`, `updated_at`) VALUES
-(1, 3004, 800.00, 'bank_transfer', 'refunded', 'TEST-LC-001', 'http://localhost:3000/test-slip.png', '2026-11-11 19:24:06', '2026-11-11 12:19:17', '2026-11-11 12:54:55'),
-(2, 3006, 800.00, 'bank_transfer', 'verified', 'TEST-LC-001', 'http://localhost:3000/test-slip.png', '2026-11-11 19:57:07', '2026-11-11 12:30:29', '2026-11-11 12:57:07'),
-(3, 3007, 800.00, 'bank_transfer', 'submitted', 'TEST-LC-001', 'http://localhost:3000/test-slip.png', NULL, '2026-11-11 12:30:33', '2026-11-11 12:30:33'),
-(4, 3001, 800.00, 'bank_transfer', 'submitted', 'TEST-LC-001', 'http://localhost:3000/test-slip.png', NULL, '2026-11-11 12:31:04', '2026-11-11 12:31:04'),
-(5, 3002, 800.00, 'bank_transfer', 'submitted', 'TEST-LC-001', 'http://localhost:3000/test-slip.png', NULL, '2026-11-11 12:31:06', '2026-11-11 12:31:06'),
-(6, 3003, 800.00, 'bank_transfer', 'submitted', 'TEST-LC-001', 'http://localhost:3000/test-slip.png', NULL, '2026-11-11 12:31:09', '2026-11-11 12:31:09'),
-(7, 3004, 800.00, 'bank_transfer', 'submitted', 'TEST-LC-001', 'http://localhost:3000/test-slip.png', NULL, '2026-11-11 12:54:11', '2026-11-11 12:54:11');
+(1, 3004, 800.00, 'bank_transfer', 'refunded', 'TEST-LC-001', '/uploads/test-slip.png', '2026-11-11 19:24:06', '2026-11-11 12:19:17', '2026-11-11 12:54:55'),
+(2, 3008, 700.00, 'bank_transfer', 'verified', 'SLIP-3008-A', '/uploads/meeting.jpg', '2026-11-11 19:57:07', '2026-11-11 12:30:29', '2026-11-11 12:57:07'),
+(3, 3007, 800.00, 'bank_transfer', 'refunded', 'TEST-LC-001', '/uploads/test-slip.png', '2026-11-11 12:30:33', '2026-11-11 12:30:33', '2026-11-11 13:22:51'),
+(4, 3001, 700.00, 'bank_transfer', 'verified', 'SLIP-3001-A', '/uploads/meeting.jpg', '2026-11-11 12:31:04', '2026-11-11 12:31:04', '2026-11-11 12:31:04'),
+(5, 3002, 480.00, 'bank_transfer', 'verified', 'SLIP-3002-A', '/uploads/study.jpg', '2026-11-11 12:31:06', '2026-11-11 12:31:06', '2026-11-11 12:31:06'),
+(6, 3003, 800.00, 'bank_transfer', 'rejected', 'TEST-LC-001', '/uploads/test-slip.png', NULL, '2026-11-11 12:31:09', '2026-11-11 12:31:09'),
+(7, 3006, 800.00, 'bank_transfer', 'refunded', 'TEST-LC-001', '/uploads/test-slip.png', '2026-11-11 12:54:11', '2026-11-11 12:54:11', '2026-11-11 13:22:45');
 
 -- --------------------------------------------------------
 -- Table structure for table `reviews`
@@ -266,8 +266,8 @@ INSERT INTO `admin_logs` (`log_id`, `admin_id`, `admin_name`, `action`, `target_
 (8, 1003, 'ผู้ดูแลระบบ (Admin)', 'UPDATE_PAYMENT_STATUS', 'payment', 2, 'submitted -> verified', '2026-11-11 12:57:07'),
 (9, 1003, 'ผู้ดูแลระบบ (Admin)', 'UPDATE_BOOKING_STATUS', 'booking', 3004, 'pending -> rejected', '2026-11-11 13:08:12'),
 (10, 1003, 'ผู้ดูแลระบบ (Admin)', 'UPDATE_BOOKING_STATUS', 'booking', 3007, 'pending -> approved', '2026-11-11 13:11:24'),
-(11, 1003, 'ผู้ดูแลระบบ (Admin)', 'UPDATE_SPACE_STATUS', 'space', 2009, 'pending -> approved', '2026-11-11 13:13:51'),
-(12, 1003, 'ผู้ดูแลระบบ (Admin)', 'UPDATE_SPACE_STATUS', 'space', 2010, 'pending -> rejected', '2026-11-11 13:14:57'),
+(11, 1003, 'ผู้ดูแลระบบ (Admin)', 'UPDATE_SPACE_STATUS', 'space', 2008, 'pending -> approved', '2026-11-11 13:13:51'),
+(12, 1003, 'ผู้ดูแลระบบ (Admin)', 'UPDATE_SPACE_STATUS', 'space', 2007, 'pending -> rejected', '2026-11-11 13:14:57'),
 (13, 1003, 'ผู้ดูแลระบบ (Admin)', 'UPDATE_BOOKING_STATUS', 'booking', 3006, 'approved -> cancelled', '2026-11-11 13:22:45'),
 (14, 1003, 'ผู้ดูแลระบบ (Admin)', 'UPDATE_BOOKING_STATUS', 'booking', 3007, 'approved -> cancelled', '2026-11-11 13:22:51');
 

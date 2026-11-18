@@ -91,17 +91,6 @@ class _HomePageState extends State<HomePage> {
       spaceController: widget.spaceController,
     ),
   );
-  Future<void> report(String subject) async {
-    final detail = await askReason(context, 'รายงาน: $subject');
-    if (detail != null && mounted) {
-      perform(
-        context,
-        () => _spaceCtrl.reportAsync(subject, detail),
-        'ส่งรายงานแล้ว',
-      );
-    }
-  }
-
   void select(int v, {BookingStatus? status, bool pendingPayout = false}) {
     setState(() {
       index = v;
@@ -359,7 +348,11 @@ class _HomePageState extends State<HomePage> {
     final categories = {
       'ทั้งหมด',
       ...store.spaces
-          .where((s) => s.status == SpaceStatus.approved)
+          .where(
+            (s) =>
+                s.status == SpaceStatus.approved &&
+                (store.maybeUser(s.ownerId)?.active ?? false),
+          )
           .map((s) => s.category),
     };
     final list = _spaceCtrl.filterSpaces(
@@ -502,6 +495,7 @@ class _HomePageState extends State<HomePage> {
                 store: store,
                 space: s,
                 bookingController: widget.bookingController,
+                paymentController: widget.paymentController,
                 spaceController: widget.spaceController,
                 authController: widget.authController,
               ),
@@ -633,6 +627,7 @@ class _HomePageState extends State<HomePage> {
                               store: store,
                               space: s,
                               bookingController: widget.bookingController,
+                              paymentController: widget.paymentController,
                               spaceController: widget.spaceController,
                               authController: widget.authController,
                             ),
@@ -1579,7 +1574,49 @@ class _HomePageState extends State<HomePage> {
         const SectionHeader('การจองล่าสุด'),
         if (bookings.isEmpty) empty('ยังไม่มีการจอง'),
         ...bookings.take(5).map(bookingCard),
+        if (!isOwner) ...[
+          const SizedBox(height: 20),
+          const SectionHeader('ประวัติการดำเนินการล่าสุด'),
+          if (store.logs.isEmpty) empty('ยังไม่มีประวัติการดำเนินการ'),
+          ...store.logs.take(10).map(_adminAuditLogCard),
+        ],
       ],
+    );
+  }
+
+  Widget _adminAuditLogCard(AuditEntry entry) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return SurfaceCard(
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            radius: 16,
+            backgroundColor: scheme.primary.withValues(alpha: 0.12),
+            child: Icon(
+              Icons.history_outlined,
+              size: 16,
+              color: scheme.primary,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(entry.action, style: theme.textTheme.titleSmall),
+                const SizedBox(height: 4),
+                Text(
+                  'โดย ${entry.actor} • ${dateTimeLabel(entry.at)}',
+                  style: theme.textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -2780,7 +2817,11 @@ class _ProfilePanelState extends State<ProfilePanel> {
             children: [
               formInput(name, 'ชื่อ-นามสกุล'),
               formInput(email, 'อีเมล'),
-              formInput(phone, 'เบอร์โทรศัพท์ (ไม่บังคับ)'),
+              formInput(
+                phone,
+                'เบอร์โทรศัพท์',
+                keyboardType: TextInputType.phone,
+              ),
               if (currentUser.role == UserRole.owner)
                 formInput(
                   bankInfo,

@@ -51,12 +51,53 @@ Future<void> main() async {
   late String tokenRenter;
   late String tokenOwner;
   late String tokenAdmin;
+  String? createdTestSpaceId;
+  String? createdTestIssueId;
+
+  Space resolveTargetSpace(AppStore store) {
+    if (createdTestSpaceId != null) {
+      for (final candidate in store.spaces) {
+        if (candidate.id == createdTestSpaceId) return candidate;
+      }
+    }
+    return store.spaces.last;
+  }
+
+  Space resolveApprovedTargetSpace(AppStore store) {
+    if (createdTestSpaceId != null) {
+      for (final candidate in store.spaces) {
+        if (candidate.id == createdTestSpaceId &&
+            candidate.status == SpaceStatus.approved) {
+          return candidate;
+        }
+      }
+    }
+    return store.spaces.lastWhere((s) => s.status == SpaceStatus.approved);
+  }
 
   setUpAll(() async {
     if (!liveBackendReady) return;
     tokenRenter = await _loginToken('renter01@rentspace.test');
     tokenOwner = await _loginToken('owner01@rentspace.test');
     tokenAdmin = await _loginToken('admin01@rentspace.test');
+  });
+
+  tearDownAll(() async {
+    if (!liveBackendReady) return;
+    final cleanupClient = ApiClient()..token = tokenAdmin;
+    try {
+      if (createdTestSpaceId != null) {
+        await cleanupClient.request('DELETE', '/spaces/$createdTestSpaceId');
+      }
+      if (createdTestIssueId != null) {
+        await cleanupClient.request(
+          'DELETE',
+          '/admin/issues/$createdTestIssueId',
+        );
+      }
+    } finally {
+      cleanupClient.client.close();
+    }
   });
 
   group('Login Test (Live Backend API)', skip: liveSkipReason, () {
@@ -148,6 +189,7 @@ Future<void> main() async {
         description: 'ห้องทดสอบจาก Unit Test',
         amenities: ['Wi-Fi', 'เครื่องปรับอากาศ'],
       );
+      createdTestSpaceId = created.id;
 
       expect(store.spaces.length, before + 1);
       expect(created.name, 'Lab Test Studio');
@@ -167,7 +209,7 @@ Future<void> main() async {
       when(() => mockTokenService.saveToken(any())).thenAnswer((_) async {});
 
       await authController.restoreSessionAsync();
-      final target = store.spaces.last;
+      final target = resolveTargetSpace(store);
 
       // แก้ไขชื่อพื้นที่
       final updated = await spaceController.saveAsync(
@@ -253,7 +295,7 @@ Future<void> main() async {
       when(() => mockTokenService.saveToken(any())).thenAnswer((_) async {});
 
       await authController.restoreSessionAsync();
-      final targetSpace = store.spaces.last;
+      final targetSpace = resolveTargetSpace(store);
 
       await spaceController.reviewAsync(targetSpace.id, true, '');
       expect(store.space(targetSpace.id).status, SpaceStatus.approved);
@@ -276,9 +318,7 @@ Future<void> main() async {
       when(() => mockTokenService.saveToken(any())).thenAnswer((_) async {});
       await authController.restoreSessionAsync();
 
-      final approvedSpace = store.spaces.lastWhere(
-        (s) => s.status == SpaceStatus.approved,
-      );
+      final approvedSpace = resolveApprovedTargetSpace(store);
       final int beforeBookings = store.bookings.length;
       final DateTime futureDate = DateTime(2027, 5, 10);
 
@@ -404,9 +444,7 @@ Future<void> main() async {
       when(() => mockTokenService.saveToken(any())).thenAnswer((_) async {});
       await authController.restoreSessionAsync();
 
-      final approvedSpace = store.spaces.lastWhere(
-        (s) => s.status == SpaceStatus.approved,
-      );
+      final approvedSpace = resolveApprovedTargetSpace(store);
       final created = await bookingController.createAsync(
         approvedSpace.id,
         DateTime(2027, 6, 15),
@@ -432,9 +470,7 @@ Future<void> main() async {
       when(() => mockTokenService.saveToken(any())).thenAnswer((_) async {});
       await authController.restoreSessionAsync();
 
-      final approvedSpace = store.spaces.lastWhere(
-        (s) => s.status == SpaceStatus.approved,
-      );
+      final approvedSpace = resolveApprovedTargetSpace(store);
       final int dayOffset = 12;
 
       // กรณีที่ 1: Owner ปฏิเสธคำขอจอง (ownerReview -> ownerRejected)
@@ -611,7 +647,7 @@ Future<void> main() async {
       when(() => mockTokenService.saveToken(any())).thenAnswer((_) async {});
       await authController.restoreSessionAsync();
 
-      final targetSpace = store.spaces.last;
+      final targetSpace = resolveTargetSpace(store);
       final customAvailability = Availability(
         days: List.generate(
           7,
@@ -658,6 +694,7 @@ Future<void> main() async {
       );
       expect(store.issues.length, beforeIssues + 1);
       final createdIssue = store.issues.first;
+      createdTestIssueId = createdIssue.id;
       expect(createdIssue.closed, isFalse);
 
       // Admin ปิดงานแจ้งปัญหาและบันทึกผลแก้ไข
@@ -687,7 +724,7 @@ Future<void> main() async {
       when(() => mockTokenService.saveToken(any())).thenAnswer((_) async {});
       await authController.restoreSessionAsync();
 
-      final targetSpace = store.spaces.last;
+      final targetSpace = resolveTargetSpace(store);
       await spaceController.suspendSpaceAsync(
         targetSpace.id,
         'รูปภาพไม่ชัดเจน',

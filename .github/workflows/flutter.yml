@@ -14,6 +14,7 @@ jobs:
           cache: 'npm'
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
+      - run: node --check app.js auth_security.js booking_guards.js snapshot_builder.js schema_bootstrap.js
       - run: node --test test/privacy.test.js
   validate:
     runs-on: ubuntu-latest

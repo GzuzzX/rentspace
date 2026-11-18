@@ -1,13 +1,31 @@
 const { normalizeRoleForApp } = require("./auth_security");
 const { DEFAULT_WEEK_HOURS } = require("./schema_bootstrap");
 
+const THAI_OFFSET_MS = 7 * 60 * 60 * 1000;
+
+function buildThaiDate(year, month, day, hours = 0, minutes = 0, seconds = 0, ms = 0) {
+  return new Date(Date.UTC(year, month - 1, day, hours, minutes, seconds, ms) - THAI_OFFSET_MS);
+}
+
+function getThaiDateParts(dateObj) {
+  const shifted = new Date(dateObj.getTime() + THAI_OFFSET_MS);
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth() + 1,
+    day: shifted.getUTCDate(),
+    hours: shifted.getUTCHours(),
+    minutes: shifted.getUTCMinutes(),
+    weekdayIndex: (shifted.getUTCDay() + 6) % 7,
+  };
+}
+
 function toIsoDate(rawValue) {
   if (!rawValue) return "2026-11-15";
   if (rawValue instanceof Date) {
-    const year = rawValue.getFullYear();
-    const month = String(rawValue.getMonth() + 1).padStart(2, "0");
-    const day = String(rawValue.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
+    const parts = getThaiDateParts(rawValue);
+    const monthText = String(parts.month).padStart(2, "0");
+    const dayText = String(parts.day).padStart(2, "0");
+    return `${parts.year}-${monthText}-${dayText}`;
   }
   return String(rawValue).substring(0, 10);
 }
@@ -47,6 +65,19 @@ function normalizeImageUrl(rawUrl) {
   return relative === "/test-slip.png" ? "/uploads/test-slip.png" : relative;
 }
 
+const LEGACY_CATEGORY_MAP = {
+  meeting_room: "ห้องประชุม",
+  study_room: "Co-working",
+  event_space: "พื้นที่อีเวนต์",
+  studio: "สตูดิโอ",
+};
+
+function normalizeSpaceCategory(rawCategory) {
+  const clean = String(rawCategory || "").trim();
+  if (!clean) return "ห้องประชุม";
+  return LEGACY_CATEGORY_MAP[clean] || clean;
+}
+
 function mapSpaceRow(row, amenityMap) {
   const defaultHours = JSON.parse(DEFAULT_WEEK_HOURS);
   const customAmenities = parseJsonOrFallback(row.amenities_json, null);
@@ -56,7 +87,7 @@ function mapSpaceRow(row, amenityMap) {
     id: String(row.space_id),
     owner_id: String(row.owner_id),
     name: row.title || "",
-    category: row.category || "ห้องประชุม",
+    category: normalizeSpaceCategory(row.category),
     location: row.location || "",
     price: Math.max(1, Math.round(Number(row.price_per_day || 350))),
     capacity: Number(row.capacity || 10),
@@ -91,11 +122,23 @@ function deriveBookingAppStatus(row) {
   }
 }
 
+function extractNaiveWallClockMinutes(rawText) {
+  if (/[zZ]|[+-]\d{2}:?\d{2}$/.test(rawText.trim())) return null;
+  const clockMatch = /(?:T|\s)(\d{2}):(\d{2})/.exec(rawText);
+  if (!clockMatch) return null;
+  return Number(clockMatch[1]) * 60 + Number(clockMatch[2]);
+}
+
 function extractMinutes(datetimeVal, fallbackMinutes) {
   if (!datetimeVal) return fallbackMinutes;
-  const dateObj = datetimeVal instanceof Date ? datetimeVal : new Date(datetimeVal);
-  if (Number.isNaN(dateObj.getTime())) return fallbackMinutes;
-  return dateObj.getHours() * 60 + dateObj.getMinutes();
+  if (typeof datetimeVal === "string") {
+    const naiveMinutes = extractNaiveWallClockMinutes(datetimeVal);
+    if (naiveMinutes != null) return naiveMinutes;
+  }
+  const parsed = new Date(datetimeVal);
+  if (Number.isNaN(parsed.getTime())) return fallbackMinutes;
+  const parts = getThaiDateParts(parsed);
+  return parts.hours * 60 + parts.minutes;
 }
 
 function mapBookingRow(row, spaceById) {
@@ -170,6 +213,12 @@ async function loadAmenityMap(db) {
   return map;
 }
 
+function resolveReviewSpaceId(reviewRow, bookingById) {
+  if (reviewRow.space_id != null) return String(reviewRow.space_id);
+  const relatedBooking = bookingById.get(String(reviewRow.booking_id));
+  return relatedBooking ? relatedBooking.space_id : "2001";
+}
+
 function mapSlipsAndReviews(paymentRows, reviewRows, bookingById) {
   const mappedSlips = paymentRows.map((paymentRow) => ({
     id: String(paymentRow.payment_id),
@@ -182,17 +231,14 @@ function mapSlipsAndReviews(paymentRows, reviewRows, bookingById) {
     rejection_reason: paymentRow.rejection_reason || "",
   }));
 
-  const mappedReviews = reviewRows.map((reviewRow) => {
-    const relatedBooking = bookingById.get(String(reviewRow.booking_id));
-    return {
-      id: String(reviewRow.review_id),
-      booking_id: String(reviewRow.booking_id),
-      space_id: relatedBooking ? relatedBooking.space_id : "2001",
-      rating: Number(reviewRow.rating),
-      comment: reviewRow.review_comment || "",
-      created_at: toIsoDateTime(reviewRow.created_at) || new Date().toISOString(),
-    };
-  });
+  const mappedReviews = reviewRows.map((reviewRow) => ({
+    id: String(reviewRow.review_id),
+    booking_id: String(reviewRow.booking_id),
+    space_id: resolveReviewSpaceId(reviewRow, bookingById),
+    rating: Number(reviewRow.rating),
+    comment: reviewRow.review_comment || "",
+    created_at: toIsoDateTime(reviewRow.created_at) || new Date().toISOString(),
+  }));
   return { mappedSlips, mappedReviews };
 }
 
@@ -217,6 +263,25 @@ function redactUsersForViewer(users, viewerId, isAdmin, visibleBookings) {
       phone: isSelf || pairedPhoneIds.has(userRecord.id) ? userRecord.phone : "",
     };
   });
+}
+
+function redactSpacesForViewer(spaces, viewerId, isAdmin, visibleBookings) {
+  if (isAdmin) return spaces;
+  const bookedSpaceIds = new Set(
+    visibleBookings.map((bookingRecord) => bookingRecord.space_id)
+  );
+  return spaces
+    .filter(
+      (spaceRecord) =>
+        spaceRecord.owner_id === viewerId ||
+        spaceRecord.status === "approved" ||
+        bookedSpaceIds.has(spaceRecord.id)
+    )
+    .map((spaceRecord) =>
+      spaceRecord.owner_id === viewerId
+        ? spaceRecord
+        : { ...spaceRecord, review_reason: "" }
+    );
 }
 
 function mapVisibleIssues(issueRows, viewerId, isAdmin) {
@@ -244,16 +309,85 @@ function buildBusySlots(bookings) {
     }));
 }
 
+async function queryAdminSnapshotRows(db) {
+  const [bookingRows] = await db.query("SELECT * FROM bookings ORDER BY booking_id DESC");
+  const [paymentRows] = await db.query("SELECT * FROM payments ORDER BY payment_id ASC");
+  const [issueRows] = await db.query("SELECT * FROM issues ORDER BY created_at DESC");
+  const [logRows] = await db.query("SELECT * FROM admin_logs ORDER BY log_id DESC LIMIT 200");
+  return {
+    bookingRows,
+    busySourceRows: bookingRows,
+    paymentRows,
+    issueRows,
+    logRows,
+  };
+}
+
+async function queryParticipantSnapshotRows(db, currentUserId) {
+  const [bookingRows] = await db.query(
+    `SELECT b.* FROM bookings b
+     LEFT JOIN spaces s ON s.space_id = b.space_id
+     WHERE b.customer_id = ? OR s.owner_id = ?
+     ORDER BY b.booking_id DESC`,
+    [currentUserId, currentUserId]
+  );
+  const [busySourceRows] = await db.query(
+    `SELECT booking_id, space_id, customer_id, start_date, start_time, end_time,
+            start_minutes, end_minutes, days_count, status, is_paid, app_status
+     FROM bookings
+     WHERE COALESCE(NULLIF(app_status, ''), status) NOT IN ('ownerRejected', 'canceled', 'rejected', 'cancelled')
+     ORDER BY booking_id DESC`
+  );
+  const [paymentRows] = await db.query(
+    `SELECT p.* FROM payments p
+     JOIN bookings b ON b.booking_id = p.booking_id
+     LEFT JOIN spaces s ON s.space_id = b.space_id
+     WHERE b.customer_id = ? OR s.owner_id = ?
+     ORDER BY p.payment_id ASC`,
+    [currentUserId, currentUserId]
+  );
+  const [issueRows] = await db.query(
+    "SELECT * FROM issues WHERE reporter_id = ? ORDER BY created_at DESC",
+    [currentUserId]
+  );
+  return {
+    bookingRows,
+    busySourceRows,
+    paymentRows,
+    issueRows,
+    logRows: [],
+  };
+}
+
+function filterParticipantScope(bookings, mappedSlips, viewerId, isAdmin) {
+  if (isAdmin) {
+    return { visibleBookings: bookings, slips: mappedSlips };
+  }
+  const visibleBookings = bookings.filter(
+    (bookingRecord) => bookingRecord.renter_id === viewerId || bookingRecord.owner_id === viewerId
+  );
+  const visibleBookingIds = new Set(visibleBookings.map((bookingRecord) => bookingRecord.id));
+  const slips = mappedSlips.filter((slip) => visibleBookingIds.has(slip.booking_id));
+  return { visibleBookings, slips };
+}
+
+function mapAdminLogEntries(logRows, isAdmin) {
+  if (!isAdmin) return [];
+  return logRows.map((logEntry) => ({
+    acted_at: toIsoDateTime(logEntry.created_at) || new Date().toISOString(),
+    actor: logEntry.admin_name || "System",
+    action: `${logEntry.action}: ${logEntry.details}`,
+  }));
+}
+
 async function buildSnapshot(db, currentUserId) {
   const [userRows] = await db.query("SELECT * FROM users ORDER BY user_id ASC");
   const [spaceRows] = await db.query("SELECT * FROM spaces ORDER BY space_id ASC");
-  const [bookingRows] = await db.query("SELECT * FROM bookings ORDER BY booking_id DESC");
   const [blockRows] = await db.query("SELECT * FROM room_blocks ORDER BY block_id ASC");
-  const [paymentRows] = await db.query("SELECT * FROM payments ORDER BY payment_id ASC");
-  const [reviewRows] = await db.query("SELECT * FROM reviews ORDER BY review_id DESC");
+  const [reviewRows] = await db.query(
+    "SELECT r.*, b.space_id FROM reviews r LEFT JOIN bookings b ON b.booking_id = r.booking_id ORDER BY r.review_id DESC"
+  );
   const [favRows] = await db.query("SELECT space_id FROM user_favorites WHERE user_id = ?", [currentUserId]);
-  const [issueRows] = await db.query("SELECT * FROM issues ORDER BY created_at DESC");
-  const [logRows] = await db.query("SELECT * FROM admin_logs ORDER BY log_id DESC LIMIT 200");
   const amenityMap = await loadAmenityMap(db);
 
   const viewerId = String(currentUserId);
@@ -261,40 +395,45 @@ async function buildSnapshot(db, currentUserId) {
   const viewer = users.find((candidate) => candidate.id === viewerId);
   const isAdmin = Boolean(viewer && viewer.role === "admin");
 
+  const scopedRows = isAdmin
+    ? await queryAdminSnapshotRows(db)
+    : await queryParticipantSnapshotRows(db, currentUserId);
+
   const spaces = spaceRows.map((spaceRow) => mapSpaceRow(spaceRow, amenityMap));
   const spaceById = new Map(spaces.map((spaceRecord) => [spaceRecord.id, spaceRecord]));
-  const bookings = bookingRows.map((bookingRow) => mapBookingRow(bookingRow, spaceById));
+  const bookings = scopedRows.bookingRows.map((bookingRow) => mapBookingRow(bookingRow, spaceById));
   const bookingById = new Map(bookings.map((bookingRecord) => [bookingRecord.id, bookingRecord]));
-  const { mappedSlips, mappedReviews } = mapSlipsAndReviews(paymentRows, reviewRows, bookingById);
-
-  const visibleBookings = isAdmin
+  const busySourceBookings = isAdmin
     ? bookings
-    : bookings.filter((bookingRecord) => bookingRecord.renter_id === viewerId || bookingRecord.owner_id === viewerId);
-  const visibleBookingIds = new Set(visibleBookings.map((bookingRecord) => bookingRecord.id));
-  const slips = isAdmin ? mappedSlips : mappedSlips.filter((slip) => visibleBookingIds.has(slip.booking_id));
+    : scopedRows.busySourceRows.map((bookingRow) => mapBookingRow(bookingRow, spaceById));
+  const { mappedSlips, mappedReviews } = mapSlipsAndReviews(
+    scopedRows.paymentRows,
+    reviewRows,
+    bookingById
+  );
+  const { visibleBookings, slips } = filterParticipantScope(bookings, mappedSlips, viewerId, isAdmin);
 
   return {
     userId: viewerId,
     users: redactUsersForViewer(users, viewerId, isAdmin, visibleBookings),
     favorites: favRows.map((favoriteRow) => String(favoriteRow.space_id)),
-    spaces,
+    spaces: redactSpacesForViewer(spaces, viewerId, isAdmin, visibleBookings),
     blocks: blockRows.map(mapBlockRow),
     bookings: visibleBookings,
     slips,
     reviews: mappedReviews,
-    issues: mapVisibleIssues(issueRows, viewerId, isAdmin),
-    busy: buildBusySlots(bookings),
-    logs: isAdmin
-      ? logRows.map((logEntry) => ({
-          acted_at: toIsoDateTime(logEntry.created_at) || new Date().toISOString(),
-          actor: logEntry.admin_name || "System",
-          action: `${logEntry.action}: ${logEntry.details}`,
-        }))
-      : [],
+    issues: mapVisibleIssues(scopedRows.issueRows, viewerId, isAdmin),
+    busy: buildBusySlots(busySourceBookings),
+    logs: mapAdminLogEntries(scopedRows.logRows, isAdmin),
   };
 }
 
 module.exports = {
+  THAI_OFFSET_MS,
+  buildThaiDate,
+  getThaiDateParts,
+  extractMinutes,
+  normalizeSpaceCategory,
   toIsoDate,
   toIsoDateTime,
   deriveBookingAppStatus,

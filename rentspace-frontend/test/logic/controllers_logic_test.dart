@@ -273,6 +273,16 @@ void main() {
         () => auth.validateProfile('ชื่อ', 'new@test.local', '123'),
         throwsA(isA<DomainError>()),
       );
+      expect(
+        () => auth.validateProfile('ชื่อ', 'new@test.local', '   '),
+        throwsA(
+          isA<DomainError>().having(
+            (e) => e.message,
+            'message',
+            'หมายเลขโทรศัพท์ไม่ถูกต้อง',
+          ),
+        ),
+      );
 
       when(
         () => setup.api.request('PUT', '/auth/profile', any()),

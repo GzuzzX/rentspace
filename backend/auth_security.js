@@ -25,11 +25,19 @@ function pruneRevokedTokens(nowSeconds) {
   }
 }
 
+function resolveTokenExpiryEpoch(rawToken) {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const decoded = jwt.decode(rawToken);
+  if (decoded && Number(decoded.exp) > 0) {
+    return Math.floor(Number(decoded.exp));
+  }
+  return nowSeconds + 7 * 86400;
+}
+
 function revokeToken(rawToken) {
   if (!rawToken) return;
   const nowSeconds = Math.floor(Date.now() / 1000);
-  const decoded = jwt.decode(rawToken);
-  const expiresAt = decoded && Number(decoded.exp) ? Number(decoded.exp) : nowSeconds + 7 * 86400;
+  const expiresAt = resolveTokenExpiryEpoch(rawToken);
   pruneRevokedTokens(nowSeconds);
   revokedTokens.set(sha256Hex(rawToken), expiresAt);
 }
@@ -37,6 +45,46 @@ function revokeToken(rawToken) {
 function isTokenRevoked(rawToken) {
   if (!rawToken) return true;
   return revokedTokens.has(sha256Hex(rawToken));
+}
+
+async function recordSession(db, userId, rawToken) {
+  if (!db || !userId || !rawToken) return;
+  const tokenHash = sha256Hex(rawToken);
+  const expiresAtEpoch = resolveTokenExpiryEpoch(rawToken);
+  await db.query("DELETE FROM auth_sessions WHERE expires_at <= NOW()");
+  await db.query(
+    "INSERT INTO auth_sessions (user_id, token_hash, expires_at) VALUES (?, ?, FROM_UNIXTIME(?)) ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), expires_at = VALUES(expires_at)",
+    [userId, tokenHash, expiresAtEpoch]
+  );
+}
+
+async function revokeSession(db, rawToken) {
+  if (!rawToken) return;
+  revokeToken(rawToken);
+  if (!db) return;
+  await db.query("DELETE FROM auth_sessions WHERE token_hash = ?", [sha256Hex(rawToken)]);
+}
+
+async function revokeOtherUserSessions(db, userId, keepRawToken) {
+  if (!db || !userId) return;
+  if (!keepRawToken) {
+    await db.query("DELETE FROM auth_sessions WHERE user_id = ?", [userId]);
+    return;
+  }
+  await db.query(
+    "DELETE FROM auth_sessions WHERE user_id = ? AND token_hash <> ?",
+    [userId, sha256Hex(keepRawToken)]
+  );
+}
+
+async function isSessionActive(db, userId, rawToken) {
+  if (!db || !userId || !rawToken) return false;
+  if (isTokenRevoked(rawToken)) return false;
+  const [sessionRows] = await db.query(
+    "SELECT session_id FROM auth_sessions WHERE user_id = ? AND token_hash = ? AND expires_at > NOW() LIMIT 1",
+    [userId, sha256Hex(rawToken)]
+  );
+  return sessionRows.length > 0;
 }
 
 function hashPassword(plainPassword) {
@@ -98,6 +146,26 @@ function normalizeRoleForDb(appRole) {
   return "customer";
 }
 
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
+}
+
+function isValidPhone(phone) {
+  return /^[0-9+\- ]{8,15}$/.test(String(phone || "").trim());
+}
+
+function extractUsernameSeed(rawUsername, email) {
+  const cleanName = typeof rawUsername === "string" ? rawUsername.trim() : "";
+  if (cleanName) return cleanName;
+  const cleanEmail = typeof email === "string" ? email.split("@")[0].trim() : "";
+  return cleanEmail || "user";
+}
+
+function buildUniqueUsername(rawUsername, email) {
+  const safeBase = extractUsernameSeed(rawUsername, email).replace(/\s+/g, "_").slice(0, 32);
+  return `${safeBase}_${crypto.randomBytes(6).toString("hex")}`;
+}
+
 function signToken(userRow) {
   const payload = {
     id: userRow.user_id,
@@ -125,8 +193,8 @@ function expandAllowedRoles(allowedRoles) {
   return expanded;
 }
 
-async function findActiveAccount(userId) {
-  const db = require("./db_config").promise();
+async function findActiveAccount(userId, dbOverride) {
+  const db = dbOverride || require("./db_config").promise();
   const [accounts] = await db.query(
     "SELECT role, status FROM users WHERE user_id = ? LIMIT 1",
     [userId]
@@ -143,16 +211,26 @@ function isAccountSuspended(account) {
   );
 }
 
+function hasAllowedRole(allowedSet, decodedUser) {
+  if (allowedSet.size === 0) return true;
+  return allowedSet.has(decodedUser.role) || allowedSet.has(decodedUser.dbRole);
+}
+
 async function authorizeDecodedToken(decodedUser, allowedSet, request, response, nextFn) {
   try {
-    const account = await findActiveAccount(decodedUser.id);
+    const db = require("./db_config").promise();
+    const sessionActive = await isSessionActive(db, decodedUser.id, request.rawToken);
+    if (!sessionActive) {
+      return response.status(401).json({ error: "Invalid or expired token" });
+    }
+    const account = await findActiveAccount(decodedUser.id, db);
     if (isAccountSuspended(account)) {
       return response.status(401).json({ error: "บัญชีถูกระงับหรือไม่พบบัญชี" });
     }
     decodedUser.dbRole = account.role;
     decodedUser.role = normalizeRoleForApp(account.role);
     request.user = decodedUser;
-    if (allowedSet.size > 0 && !allowedSet.has(decodedUser.role) && !allowedSet.has(decodedUser.dbRole)) {
+    if (!hasAllowedRole(allowedSet, decodedUser)) {
       return response.status(403).json({ error: "Access denied: insufficient permissions" });
     }
     return nextFn();
@@ -182,6 +260,49 @@ const verifyToken = (allowedRoles = []) => {
   };
 };
 
+function resolveClientAddress(request) {
+  const forwarded = request.headers?.["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.trim()) {
+    return forwarded.split(",")[0].trim();
+  }
+  return request.ip || request.socket?.remoteAddress || "unknown";
+}
+
+function pruneWindowAttempts(attemptList, cutoffEpoch) {
+  return attemptList.filter((timestamp) => timestamp > cutoffEpoch);
+}
+
+function pruneExpiredBuckets(attemptBuckets, cutoffEpoch) {
+  for (const [clientKey, attemptList] of attemptBuckets) {
+    if (pruneWindowAttempts(attemptList, cutoffEpoch).length === 0) {
+      attemptBuckets.delete(clientKey);
+    }
+  }
+}
+
+function createAuthRateLimiter({ windowMs = 60000, maxAttempts = 40 } = {}) {
+  const attemptBuckets = new Map();
+  return function authRateLimiter(request, response, nextFn) {
+    const nowEpoch = Date.now();
+    const cutoffEpoch = nowEpoch - windowMs;
+    const clientAddress = resolveClientAddress(request);
+    const activeAttempts = pruneWindowAttempts(
+      attemptBuckets.get(clientAddress) || [],
+      cutoffEpoch
+    );
+    if (activeAttempts.length >= maxAttempts) {
+      attemptBuckets.set(clientAddress, activeAttempts);
+      return response.status(429).json({
+        error: "คำขอเข้าสู่ระบบถี่เกินไป กรุณารอสักครู่แล้วลองใหม่",
+      });
+    }
+    activeAttempts.push(nowEpoch);
+    attemptBuckets.set(clientAddress, activeAttempts);
+    if (attemptBuckets.size > 500) pruneExpiredBuckets(attemptBuckets, cutoffEpoch);
+    return nextFn();
+  };
+}
+
 module.exports = {
   JWT_SECRET,
   sha256Hex,
@@ -189,8 +310,16 @@ module.exports = {
   verifyPassword,
   revokeToken,
   isTokenRevoked,
+  recordSession,
+  revokeSession,
+  revokeOtherUserSessions,
+  isSessionActive,
+  isValidEmail,
+  isValidPhone,
+  buildUniqueUsername,
   normalizeRoleForApp,
   normalizeRoleForDb,
   signToken,
   verifyToken,
+  createAuthRateLimiter,
 };

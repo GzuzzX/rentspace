@@ -26,7 +26,7 @@ Flutter 3.44.8 / Dart 3.12.2
 
 ```powershell
 flutter pub get
-flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:3000/api
+flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:3001/api
 flutter analyze
 flutter test
 flutter build web
@@ -39,5 +39,5 @@ URL ต้องรวม /api; เปลี่ยน dart-define แล้ว�
 - บันทึกจ่ายเป็นการเก็บสถานะ ไม่มีการโอนเงินจริงหรือตรวจสลิปกับธนาคารอัตโนมัติ
 - อัปเดตผ่าน polling ไม่ใช่ WebSocket
 - Snapshot รวมภาพสลิปตามสิทธิ์ หากข้อมูลมากควรเพิ่ม pagination และแยกโหลดภาพ
-- เวลาใช้ local wall clock ให้ตั้งเครื่องและฐานข้อมูลเป็น Asia/Bangkok
+- Backend แปลงเวลาและขอบเขตวันเป็นเวลาไทย (`Asia/Bangkok`, `UTC+7`) อัตโนมัติ ไม่ขึ้นกับ timezone ของเครื่องเซิร์ฟเวอร์
 - Android/Windows ต้องทดสอบเพิ่มเติมบนอุปกรณ์เป้าหมาย

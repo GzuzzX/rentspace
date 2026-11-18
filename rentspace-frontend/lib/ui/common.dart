@@ -37,6 +37,15 @@ Future<bool> perform(
       ).showSnackBar(SnackBar(content: Text(e.message)));
     }
     return false;
+  } catch (_) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('เกิดข้อผิดพลาดในการดำเนินการ กรุณาลองใหม่อีกครั้ง'),
+        ),
+      );
+    }
+    return false;
   } finally {
     if (overlay != null) loading.remove();
     loading.dispose();

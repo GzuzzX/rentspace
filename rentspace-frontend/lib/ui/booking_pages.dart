@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../controllers/auth_controller.dart';
 import '../controllers/booking_controller.dart';
+import '../controllers/payment_controller.dart';
 import '../controllers/space_controller.dart';
 import '../data/app_store.dart';
 import '../models/domain.dart';
@@ -16,12 +17,14 @@ class ReservePage extends StatefulWidget {
     required this.store,
     required this.space,
     this.bookingController,
+    this.paymentController,
     this.spaceController,
     this.authController,
   });
   final AppStore store;
   final Space space;
   final BookingController? bookingController;
+  final PaymentController? paymentController;
   final SpaceController? spaceController;
   final AuthController? authController;
   @override
@@ -576,6 +579,7 @@ class _ReservePageState extends State<ReservePage> {
                             renterNote: noteCtrl.text.trim(),
                             authController: widget.authController,
                             bookingController: widget.bookingController,
+                            paymentController: widget.paymentController,
                             spaceController: widget.spaceController,
                           ),
                         ),
@@ -658,6 +662,7 @@ class BookingConfirmationPage extends StatefulWidget {
     this.renterNote = '',
     this.authController,
     this.bookingController,
+    this.paymentController,
     this.spaceController,
   });
 
@@ -672,6 +677,7 @@ class BookingConfirmationPage extends StatefulWidget {
   final String renterNote;
   final AuthController? authController;
   final BookingController? bookingController;
+  final PaymentController? paymentController;
   final SpaceController? spaceController;
 
   @override
@@ -732,6 +738,7 @@ class _BookingConfirmationPageState extends State<BookingConfirmationPage> {
             store: widget.store,
             bookingId: created!.id,
             bookingController: widget.bookingController,
+            paymentController: widget.paymentController,
             spaceController: widget.spaceController,
           ),
         ),

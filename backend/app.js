@@ -8,19 +8,34 @@ const con = require("./db_config");
 const {
   hashPassword,
   verifyPassword,
-  revokeToken,
+  recordSession,
+  revokeSession,
+  revokeOtherUserSessions,
+  isValidEmail,
+  isValidPhone,
+  buildUniqueUsername,
   normalizeRoleForApp,
   normalizeRoleForDb,
   signToken,
   verifyToken,
+  createAuthRateLimiter,
 } = require("./auth_security");
 const { DEFAULT_WEEK_HOURS, ensureSchema } = require("./schema_bootstrap");
 const { toIsoDate, buildSnapshot } = require("./snapshot_builder");
 const {
   createBookingTransactional,
   computeBookingEndsAt,
+  sweepExpiredBookings,
+  submitPaymentSlipTransactional,
+  applyGuardedBookingUpdate,
+  reviewPaymentSlipTransactional,
+  isValidHoursList,
+  resolveSpaceMutationInput,
+  toggleSpaceFavorite,
+  deleteSpaceTransactional,
   guardSpaceAccess,
   guardBookingAccess,
+  guardSlipUploadAccess,
 } = require("./booking_guards");
 
 const app = express();
@@ -36,9 +51,14 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 },
 });
 
-app.use(cors());
+const corsOptions = process.env.CORS_ORIGIN
+  ? { origin: process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean) }
+  : undefined;
+const authRateLimiter = createAuthRateLimiter();
+
+app.use(cors(corsOptions));
 app.use(express.json({ limit: "15mb" }));
-app.use("/uploads", express.static(uploadsDir));
+app.use("/uploads", guardSlipUploadAccess(db, verifyToken()), express.static(uploadsDir));
 app.get("/test-slip.png", (_req, res) =>
   res.sendFile(path.join(uploadsDir, "test-slip.png"))
 );
@@ -68,33 +88,6 @@ function safeErrorMessage(err) {
   return "เกิดข้อผิดพลาดภายในเซิร์ฟเวอร์";
 }
 
-function isValidEmail(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
-}
-
-function isSafeImageInput(rawUrl) {
-  const clean = String(rawUrl || "").trim();
-  if (!clean) return true;
-  if (clean.startsWith("data:image/png;base64,") || clean.startsWith("data:image/jpeg;base64,")) {
-    return clean.length <= 8 * 1024 * 1024;
-  }
-  if (clean.startsWith("/uploads/") || clean.startsWith("/api/spaces/")) return true;
-  return /^https?:\/\/[^\s<>"]+$/i.test(clean);
-}
-
-function isValidHoursList(days) {
-  return (
-    Array.isArray(days) &&
-    days.length === 7 &&
-    days.every((d) => {
-      if (!d || typeof d !== "object") return false;
-      const start = Number(d.start);
-      const end = Number(d.end);
-      return Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end <= 1440 && start < end;
-    })
-  );
-}
-
 async function recordAdminLog(actorId, actorName, action, targetType, targetId, details) {
   await db.query(
     `INSERT INTO admin_logs (admin_id, admin_name, action, target_type, target_id, details)
@@ -120,6 +113,7 @@ app.get("/api/state", verifyToken(), async (req, res) => {
     if (users.length === 0 || users[0].status === "suspended" || users[0].role === "disabled") {
       return res.status(401).json({ error: "บัญชีถูกระงับหรือไม่พบบัญชี" });
     }
+    await sweepExpiredBookings(db);
     const snapshot = await buildSnapshot(db, req.user.id);
     return res.json(snapshot);
   } catch (err) {
@@ -151,6 +145,7 @@ async function handleLogin(req, res) {
       return res.status(401).json({ error: "อีเมลหรือรหัสผ่านไม่ถูกต้อง" });
     }
     const token = signToken(account);
+    await recordSession(db, account.user_id, token);
     return res.json({
       token,
       id: String(account.user_id),
@@ -172,20 +167,22 @@ async function handleLogin(req, res) {
   }
 }
 
-app.post("/api/login", handleLogin);
-app.post("/api/auth/login", handleLogin);
+app.post("/api/login", authRateLimiter, handleLogin);
+app.post("/api/auth/login", authRateLimiter, handleLogin);
 
 async function handleRegister(req, res) {
   try {
     const name = String(req.body.name || req.body.username || "").trim();
     const email = String(req.body.email || "").trim();
-    const rawUsername = String(req.body.username || email.split("@")[0] || "").trim();
     const password = String(req.body.password || "");
     const phone = String(req.body.phone || "").trim();
     const dbRole = normalizeRoleForDb(req.body.role);
 
-    if (!name || !email || password.length < 8) {
-      return res.status(400).json({ error: "กรุณากรอกชื่อ อีเมล และรหัสผ่านอย่างน้อย 8 ตัวอักษร" });
+    if (!name || !isValidEmail(email) || password.length < 8) {
+      return res.status(400).json({ error: "กรุณากรอกชื่อ อีเมลที่ถูกต้อง และรหัสผ่านอย่างน้อย 8 ตัวอักษร" });
+    }
+    if (phone && !isValidPhone(phone)) {
+      return res.status(400).json({ error: "หมายเลขโทรศัพท์ไม่ถูกต้อง" });
     }
     if (dbRole === "admin") {
       return res.status(403).json({ error: "ไม่สามารถสมัครบัญชี Admin" });
@@ -194,7 +191,7 @@ async function handleRegister(req, res) {
     if (dup.length > 0) {
       return res.status(409).json({ error: "อีเมลนี้ถูกใช้งานแล้ว" });
     }
-    const uniqueUsername = `${rawUsername}_${Date.now().toString().slice(-4)}`.slice(0, 50);
+    const uniqueUsername = buildUniqueUsername(req.body.username, email);
     const hashed = hashPassword(password);
     const [ins] = await db.query(
       `INSERT INTO users (name, username, email, phone, password_hash, role, status)
@@ -203,6 +200,7 @@ async function handleRegister(req, res) {
     );
     const [createdRows] = await db.query("SELECT * FROM users WHERE user_id = ?", [ins.insertId]);
     const token = signToken(createdRows[0]);
+    await recordSession(db, ins.insertId, token);
     return res.status(201).json({
       token,
       id: String(ins.insertId),
@@ -219,8 +217,8 @@ async function handleRegister(req, res) {
   }
 }
 
-app.post("/api/register", handleRegister);
-app.post("/api/auth/register", handleRegister);
+app.post("/api/register", authRateLimiter, handleRegister);
+app.post("/api/auth/register", authRateLimiter, handleRegister);
 
 app.get("/api/auth/me", verifyToken(), async (req, res) => {
   try {
@@ -241,9 +239,13 @@ app.get("/api/auth/me", verifyToken(), async (req, res) => {
   }
 });
 
-app.post("/api/auth/logout", verifyToken(), (req, res) => {
-  revokeToken(req.rawToken);
-  return res.json({ ok: true });
+app.post("/api/auth/logout", verifyToken(), async (req, res) => {
+  try {
+    await revokeSession(db, req.rawToken);
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: safeErrorMessage(err) });
+  }
 });
 
 app.put("/api/auth/profile", verifyToken(), async (req, res) => {
@@ -254,6 +256,9 @@ app.put("/api/auth/profile", verifyToken(), async (req, res) => {
     const bankInfo = req.body.bankInfo != null ? String(req.body.bankInfo).trim() : "";
     if (!name || !isValidEmail(email)) {
       return res.status(400).json({ error: "กรุณาระบุชื่อและอีเมลที่ถูกต้อง" });
+    }
+    if (phone && !isValidPhone(phone)) {
+      return res.status(400).json({ error: "หมายเลขโทรศัพท์ไม่ถูกต้อง" });
     }
     const [dup] = await db.query(
       "SELECT user_id FROM users WHERE email = ? AND user_id <> ? LIMIT 1",
@@ -287,6 +292,7 @@ app.put("/api/auth/password", verifyToken(), async (req, res) => {
       hashPassword(newPassword),
       req.user.id,
     ]);
+    await revokeOtherUserSessions(db, req.user.id, req.rawToken);
     return res.json({ ok: true });
   } catch (err) {
     return res.status(500).json({ error: safeErrorMessage(err) });
@@ -298,9 +304,14 @@ app.put("/api/auth/password", verifyToken(), async (req, res) => {
 app.get("/api/spaces", async (_req, res) => {
   try {
     const [rows] = await db.query(
-      `SELECT space_id, owner_id, title, description, location, price_per_day, category, capacity,
-              image_url, rating, rating_count, status
-       FROM spaces WHERE status = 'approved' ORDER BY space_id DESC`
+      `SELECT s.space_id, s.owner_id, s.title, s.description, s.location, s.price_per_day, s.category, s.capacity,
+              s.image_url, s.rating, s.rating_count, s.status
+       FROM spaces s
+       JOIN users u ON u.user_id = s.owner_id
+       WHERE s.status = 'approved'
+         AND COALESCE(u.status, 'active') NOT IN ('suspended', 'disabled')
+         AND u.role <> 'disabled'
+       ORDER BY s.space_id DESC`
     );
     return res.json(rows);
   } catch (err) {
@@ -327,39 +338,28 @@ async function syncSpaceAmenities(spaceId, amenityNames) {
 
 app.post("/api/spaces", verifyToken(["owner", "admin"]), async (req, res) => {
   try {
-    const title = String(req.body.name || req.body.title || "").trim();
-    const category = String(req.body.category || "ห้องประชุม").trim();
-    const location = String(req.body.location || "").trim();
-    const price = Number(req.body.price || req.body.price_per_day || 0);
-    const capacity = Number(req.body.capacity || 10);
-    const description = String(req.body.description || "").trim();
-    const imageUrl = String(req.body.image || req.body.image_url || "").trim();
-    const amenities = Array.isArray(req.body.amenities) ? req.body.amenities : [];
-    const hoursJson = req.body.hours ? JSON.stringify(req.body.hours) : DEFAULT_WEEK_HOURS;
-
-    if (!title || !location || !Number.isFinite(price) || price <= 0 || !Number.isInteger(capacity) || capacity <= 0) {
-      return res.status(400).json({ error: "กรอกข้อมูลพื้นที่ ราคา และความจุให้ครบถ้วน" });
+    const resolved = resolveSpaceMutationInput(req.body, null);
+    if (resolved.error) {
+      return res.status(400).json({ error: resolved.error });
     }
-    if (!isSafeImageInput(imageUrl)) {
-      return res.status(400).json({ error: "รูปแบบลิงก์หรือไฟล์รูปภาพไม่ถูกต้อง" });
-    }
+    const spaceInput = resolved.spaceInput;
     const [ins] = await db.query(
       `INSERT INTO spaces (owner_id, title, description, location, price_per_day, category, capacity, image_url, hours_json, amenities_json, status)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
       [
         req.user.id,
-        title,
-        description,
-        location,
-        price,
-        category,
-        capacity,
-        imageUrl,
-        hoursJson,
-        JSON.stringify(amenities),
+        spaceInput.title,
+        spaceInput.description,
+        spaceInput.location,
+        spaceInput.price,
+        spaceInput.category,
+        spaceInput.capacity,
+        spaceInput.imageUrl,
+        spaceInput.hoursJson,
+        spaceInput.amenitiesJson,
       ]
     );
-    await syncSpaceAmenities(ins.insertId, amenities);
+    await syncSpaceAmenities(ins.insertId, spaceInput.amenities);
     return res.status(201).json({ id: String(ins.insertId), space_id: ins.insertId, status: "pending" });
   } catch (err) {
     return res.status(500).json({ error: safeErrorMessage(err) });
@@ -387,34 +387,42 @@ function parseAvailabilityBlocks(rawBlocks) {
 app.put("/api/spaces/:id", verifyToken(["owner", "admin"]), guardSpaceAccess(db), async (req, res) => {
   try {
     const spaceId = req.params.id;
-    const existing = req.spaceRecord || {};
-    const title = String(req.body.name ?? req.body.title ?? existing.title ?? "").trim();
-    const category = String(req.body.category ?? existing.category ?? "ห้องประชุม").trim();
-    const location = String(req.body.location ?? existing.location ?? "").trim();
-    const rawPrice = req.body.price ?? req.body.price_per_day ?? existing.price_per_day ?? 0;
-    const price = Number(rawPrice);
-    const rawCapacity = req.body.capacity ?? existing.capacity ?? 10;
-    const capacity = Number(rawCapacity);
-    const description = String(req.body.description ?? existing.description ?? "").trim();
-    const imageUrl = String(req.body.image ?? req.body.image_url ?? existing.image_url ?? "").trim();
-    const amenities = Array.isArray(req.body.amenities) ? req.body.amenities : [];
-    const hoursJson = req.body.hours ? JSON.stringify(req.body.hours) : existing.hours_json || DEFAULT_WEEK_HOURS;
-
-    if (!title || !location || !Number.isFinite(price) || price <= 0 || !Number.isInteger(capacity) || capacity <= 0) {
-      return res.status(400).json({ error: "กรอกข้อมูลพื้นที่ ราคา และความจุให้ครบถ้วน" });
+    const resolved = resolveSpaceMutationInput(req.body, req.spaceRecord || {});
+    if (resolved.error) {
+      return res.status(400).json({ error: resolved.error });
     }
-    if (!isSafeImageInput(imageUrl)) {
-      return res.status(400).json({ error: "รูปแบบลิงก์หรือไฟล์รูปภาพไม่ถูกต้อง" });
-    }
+    const spaceInput = resolved.spaceInput;
     const requireModeration = req.user.role !== "admin";
     await db.query(
       `UPDATE spaces
        SET title = ?, category = ?, location = ?, price_per_day = ?, capacity = ?, description = ?, image_url = ?, hours_json = ?, amenities_json = ?${requireModeration ? ", status = 'pending', review_reason = ''" : ""}
        WHERE space_id = ?`,
-      [title, category, location, price, capacity, description, imageUrl, hoursJson, JSON.stringify(amenities), spaceId]
+      [
+        spaceInput.title,
+        spaceInput.category,
+        spaceInput.location,
+        spaceInput.price,
+        spaceInput.capacity,
+        spaceInput.description,
+        spaceInput.imageUrl,
+        spaceInput.hoursJson,
+        spaceInput.amenitiesJson,
+        spaceId,
+      ]
     );
-    await syncSpaceAmenities(spaceId, amenities);
+    if (spaceInput.shouldSyncAmenities) {
+      await syncSpaceAmenities(spaceId, spaceInput.amenities);
+    }
     return res.json({ id: String(spaceId), ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: safeErrorMessage(err) });
+  }
+});
+
+app.delete("/api/spaces/:id", verifyToken(["owner", "admin"]), guardSpaceAccess(db), async (req, res) => {
+  try {
+    const outcome = await deleteSpaceTransactional(db, req.params.id, uploadsDir);
+    return res.status(outcome.status).json(outcome.body);
   } catch (err) {
     return res.status(500).json({ error: safeErrorMessage(err) });
   }
@@ -428,7 +436,7 @@ app.put(
     let connection = null;
     try {
       const spaceId = req.params.id;
-      const days = Array.isArray(req.body.days) ? req.body.days : JSON.parse(DEFAULT_WEEK_HOURS);
+      const days = req.body.days !== undefined ? req.body.days : JSON.parse(DEFAULT_WEEK_HOURS);
       if (!isValidHoursList(days)) {
         return res.status(400).json({ error: "เวลาเปิดปิดของแต่ละวันไม่ถูกต้อง" });
       }
@@ -472,17 +480,8 @@ app.put(
 
 app.post("/api/spaces/:id/favorite", verifyToken(), async (req, res) => {
   try {
-    const spaceId = req.params.id;
-    const [existing] = await db.query(
-      "SELECT 1 FROM user_favorites WHERE user_id = ? AND space_id = ?",
-      [req.user.id, spaceId]
-    );
-    if (existing.length > 0) {
-      await db.query("DELETE FROM user_favorites WHERE user_id = ? AND space_id = ?", [req.user.id, spaceId]);
-    } else {
-      await db.query("INSERT INTO user_favorites (user_id, space_id) VALUES (?, ?)", [req.user.id, spaceId]);
-    }
-    return res.json({ ok: true });
+    const outcome = await toggleSpaceFavorite(db, req.user.id, req.params.id);
+    return res.status(outcome.status).json(outcome.body);
   } catch (err) {
     return res.status(500).json({ error: safeErrorMessage(err) });
   }
@@ -491,6 +490,7 @@ app.post("/api/spaces/:id/favorite", verifyToken(), async (req, res) => {
 app.get("/api/spaces/:spaceId/availability", async (req, res) => {
   try {
     const spaceId = req.params.spaceId;
+    await sweepExpiredBookings(db);
     const [bookings] = await db.query(
       "SELECT booking_id, start_date, end_date, start_time, end_time, status FROM bookings WHERE space_id = ? AND status IN ('pending','approved','confirmed')",
       [spaceId]
@@ -506,6 +506,7 @@ app.get("/api/spaces/:spaceId/availability", async (req, res) => {
 
 app.get("/api/bookings", verifyToken(), async (req, res) => {
   try {
+    await sweepExpiredBookings(db);
     if (req.user.role === "admin") {
       const [rows] = await db.query("SELECT * FROM bookings ORDER BY booking_id DESC");
       return res.json(rows);
@@ -541,11 +542,14 @@ app.post(
   guardBookingAccess(db, { access: "ownerOrAdmin", allowedStatuses: ["ownerReview"] }),
   async (req, res) => {
     try {
-      await db.query(
-        "UPDATE bookings SET status = 'approved', app_status = 'paymentDue', approved_at = NOW(), reason = ?, reason_kind = 'none' WHERE booking_id = ?",
-        [String(req.body.reason || "").trim(), req.params.id]
+      const outcome = await applyGuardedBookingUpdate(
+        db,
+        `UPDATE bookings
+         SET status = 'approved', app_status = 'paymentDue', approved_at = NOW(), reason = ?, reason_kind = 'none'
+         WHERE booking_id = ? AND COALESCE(NULLIF(app_status, ''), status) IN ('ownerReview', 'pending')`,
+        [String((req.body && req.body.reason) || "").trim(), req.params.id]
       );
-      return res.json({ ok: true });
+      return res.status(outcome.status).json(outcome.body);
     } catch (err) {
       return res.status(500).json({ error: safeErrorMessage(err) });
     }
@@ -558,12 +562,18 @@ app.post(
   guardBookingAccess(db, { access: "ownerOrAdmin", allowedStatuses: ["ownerReview"] }),
   async (req, res) => {
     try {
-      const reason = String(req.body.reason || "").trim();
-      await db.query(
-        "UPDATE bookings SET status = 'rejected', app_status = 'ownerRejected', reason = ?, reason_kind = 'ownerRejected' WHERE booking_id = ?",
+      const reason = String((req.body && req.body.reason) || "").trim();
+      if (!reason) {
+        return res.status(400).json({ error: "กรุณาระบุเหตุผลที่ปฏิเสธคำขอ" });
+      }
+      const outcome = await applyGuardedBookingUpdate(
+        db,
+        `UPDATE bookings
+         SET status = 'rejected', app_status = 'ownerRejected', reason = ?, reason_kind = 'ownerRejected'
+         WHERE booking_id = ? AND COALESCE(NULLIF(app_status, ''), status) IN ('ownerReview', 'pending')`,
         [reason, req.params.id]
       );
-      return res.json({ ok: true });
+      return res.status(outcome.status).json(outcome.body);
     } catch (err) {
       return res.status(500).json({ error: safeErrorMessage(err) });
     }
@@ -580,12 +590,22 @@ app.post(
   }),
   async (req, res) => {
     try {
-      const reason = String(req.body.reason || "").trim();
-      await db.query(
-        "UPDATE bookings SET status = 'cancelled', app_status = 'canceled', reason = ?, reason_kind = 'canceledByUser' WHERE booking_id = ?",
+      const reason = String((req.body && req.body.reason) || "").trim();
+      if (!reason) {
+        return res.status(400).json({ error: "กรุณาระบุเหตุผลการยกเลิก" });
+      }
+      const allowedStatusList =
+        req.user.role === "admin"
+          ? "('ownerReview', 'pending', 'paymentDue', 'approved', 'slipReview', 'slipRejected', 'confirmed')"
+          : "('ownerReview', 'pending', 'paymentDue', 'approved', 'slipRejected')";
+      const outcome = await applyGuardedBookingUpdate(
+        db,
+        `UPDATE bookings
+         SET status = 'cancelled', app_status = 'canceled', reason = ?, reason_kind = 'canceledByUser'
+         WHERE booking_id = ? AND COALESCE(NULLIF(app_status, ''), status) IN ${allowedStatusList}`,
         [reason, req.params.id]
       );
-      return res.json({ ok: true });
+      return res.status(outcome.status).json(outcome.body);
     } catch (err) {
       return res.status(500).json({ error: safeErrorMessage(err) });
     }
@@ -602,11 +622,14 @@ app.post(
       if (Date.now() < endsAt.getTime()) {
         return res.status(409).json({ error: "ยังไม่ถึงเวลาสิ้นสุดการจอง" });
       }
-      await db.query(
-        "UPDATE bookings SET status = 'completed', app_status = 'completed', completed_at = NOW() WHERE booking_id = ?",
+      const outcome = await applyGuardedBookingUpdate(
+        db,
+        `UPDATE bookings
+         SET status = 'completed', app_status = 'completed', completed_at = NOW()
+         WHERE booking_id = ? AND COALESCE(NULLIF(app_status, ''), status) = 'confirmed'`,
         [req.params.id]
       );
-      return res.json({ ok: true });
+      return res.status(outcome.status).json(outcome.body);
     } catch (err) {
       return res.status(500).json({ error: safeErrorMessage(err) });
     }
@@ -626,6 +649,9 @@ app.post(
       }
       const rating = Math.round(rawRating);
       const comment = String(req.body.comment || req.body.review_comment || "").trim();
+      if (!comment) {
+        return res.status(400).json({ error: "กรุณากรอกความคิดเห็นรีวิว" });
+      }
 
       await db.query("UPDATE bookings SET rating = ?, review_comment = ? WHERE booking_id = ?", [
         rating,
@@ -671,32 +697,31 @@ app.post(
   async (req, res) => {
     try {
       const bookingId = req.params.id;
-      const note = String(req.body.note || "").trim();
-      const file = req.file;
-      if (!file) {
+      const note = String((req.body && req.body.note) || "").trim();
+      const uploadedFile = req.file;
+      if (!uploadedFile) {
         return res.status(400).json({ error: "กรุณาแนบไฟล์สลิป" });
       }
-      const ext = resolveValidatedSlipExtension(file);
+      const ext = resolveValidatedSlipExtension(uploadedFile);
       if (!ext) {
         return res.status(400).json({ error: "รองรับภาพ JPG และ PNG เท่านั้น" });
       }
       const storedName = `slip_${bookingId}_${Date.now()}${ext}`;
-      fs.writeFileSync(path.join(uploadsDir, storedName), file.buffer);
-
+      const storedFilePath = path.join(uploadsDir, storedName);
       const imageUrl = `/uploads/${storedName}`;
-      const base64Data = file.buffer.toString("base64");
+      const base64Content = uploadedFile.buffer.toString("base64");
       const amount = req.bookingRecord?.total_price ? req.bookingRecord.total_price : 500;
-
-      await db.query(
-        `INSERT INTO payments (booking_id, amount, payment_method, status, transaction_ref, slip_image_url, paid_at, file_name, note, image_data)
-         VALUES (?, ?, 'bank_transfer', 'submitted', ?, ?, NOW(), ?, ?, ?)`,
-        [bookingId, amount, `SLIP-${bookingId}`, imageUrl, path.basename(file.originalname || storedName), note, base64Data]
-      );
-      await db.query("UPDATE bookings SET app_status = 'slipReview', slip_image_url = ? WHERE booking_id = ?", [
-        imageUrl,
+      const outcome = await submitPaymentSlipTransactional(db, {
         bookingId,
-      ]);
-      return res.status(201).json({ ok: true, image_url: imageUrl });
+        note,
+        storedFilePath,
+        imageUrl,
+        originalFileName: path.basename(uploadedFile.originalname || storedName),
+        fileBuffer: uploadedFile.buffer,
+        base64Content,
+        amount,
+      });
+      return res.status(outcome.status).json(outcome.body);
     } catch (err) {
       return res.status(500).json({ error: safeErrorMessage(err) });
     }
@@ -710,27 +735,15 @@ app.post(
   async (req, res) => {
     try {
       const bookingId = req.params.id;
-      const approve = Boolean(req.body.approve);
-      const reason = String(req.body.reason || "").trim();
-
-      if (approve) {
-        await db.query(
-          "UPDATE bookings SET status = 'confirmed', app_status = 'confirmed', is_paid = 1, confirmed_at = NOW(), reason = '', reason_kind = 'none' WHERE booking_id = ?",
-          [bookingId]
-        );
-        await db.query(
-          "UPDATE payments SET status = 'verified' WHERE booking_id = ? ORDER BY payment_id DESC LIMIT 1",
-          [bookingId]
-        );
-      } else {
-        await db.query(
-          "UPDATE bookings SET app_status = 'slipRejected', slip_rejected_at = NOW(), reason = ?, reason_kind = 'slipRejected' WHERE booking_id = ?",
-          [reason, bookingId]
-        );
-        await db.query(
-          "UPDATE payments SET status = 'rejected', rejection_reason = ? WHERE booking_id = ? ORDER BY payment_id DESC LIMIT 1",
-          [reason, bookingId]
-        );
+      const approve = Boolean(req.body && req.body.approve);
+      const reason = String((req.body && req.body.reason) || "").trim();
+      const outcome = await reviewPaymentSlipTransactional(db, {
+        bookingId,
+        approve,
+        reason,
+      });
+      if (outcome.status !== 200) {
+        return res.status(outcome.status).json(outcome.body);
       }
       await recordAdminLog(
         req.user.id,
@@ -740,7 +753,7 @@ app.post(
         bookingId,
         approve ? "อนุมัติสลิป" : `ปฏิเสธสลิป: ${reason}`
       );
-      return res.json({ ok: true });
+      return res.status(outcome.status).json(outcome.body);
     } catch (err) {
       return res.status(500).json({ error: safeErrorMessage(err) });
     }
@@ -876,38 +889,55 @@ app.put("/api/admin/users/:id/toggle", verifyToken("admin"), async (req, res) =>
   }
 });
 
-app.put("/api/admin/spaces/:id/approve", verifyToken("admin"), async (req, res) => {
+async function applyAdminSpaceModeration(req, res, moderationSpec) {
   try {
-    await db.query("UPDATE spaces SET status = 'approved', review_reason = '' WHERE space_id = ?", [req.params.id]);
-    await recordAdminLog(req.user.id, req.user.username, "APPROVE_SPACE", "space", req.params.id, "อนุมัติพื้นที่");
+    const [updateOutcome] = await db.query(moderationSpec.sql, moderationSpec.params);
+    if (!updateOutcome || updateOutcome.affectedRows === 0) {
+      return res.status(404).json({ error: "ไม่พบพื้นที่" });
+    }
+    await recordAdminLog(
+      req.user.id,
+      req.user.username,
+      moderationSpec.action,
+      "space",
+      req.params.id,
+      moderationSpec.details
+    );
     return res.json({ ok: true });
   } catch (err) {
     return res.status(500).json({ error: safeErrorMessage(err) });
   }
+}
+
+app.put("/api/admin/spaces/:id/approve", verifyToken("admin"), async (req, res) => {
+  return applyAdminSpaceModeration(req, res, {
+    sql: "UPDATE spaces SET status = 'approved', review_reason = '' WHERE space_id = ?",
+    params: [req.params.id],
+    action: "APPROVE_SPACE",
+    details: "อนุมัติพื้นที่",
+  });
 });
 
 app.put("/api/admin/spaces/:id/reject", verifyToken("admin"), async (req, res) => {
-  try {
-    const reason = String(req.body.reason || "").trim();
-    await db.query("UPDATE spaces SET status = 'rejected', review_reason = ? WHERE space_id = ?", [
-      reason,
-      req.params.id,
-    ]);
-    await recordAdminLog(req.user.id, req.user.username, "REJECT_SPACE", "space", req.params.id, reason);
-    return res.json({ ok: true });
-  } catch (err) {
-    return res.status(500).json({ error: safeErrorMessage(err) });
+  const reason = String((req.body && req.body.reason) || "").trim();
+  if (!reason) {
+    return res.status(400).json({ error: "กรุณาระบุเหตุผล" });
   }
+  return applyAdminSpaceModeration(req, res, {
+    sql: "UPDATE spaces SET status = 'rejected', review_reason = ? WHERE space_id = ?",
+    params: [reason, req.params.id],
+    action: "REJECT_SPACE",
+    details: reason,
+  });
 });
 
 app.put("/api/admin/spaces/:id/activate", verifyToken("admin"), async (req, res) => {
-  try {
-    await db.query("UPDATE spaces SET status = 'approved', review_reason = '' WHERE space_id = ?", [req.params.id]);
-    await recordAdminLog(req.user.id, req.user.username, "ACTIVATE_SPACE", "space", req.params.id, "เปิดใช้งานพื้นที่อีกครั้ง");
-    return res.json({ ok: true });
-  } catch (err) {
-    return res.status(500).json({ error: safeErrorMessage(err) });
-  }
+  return applyAdminSpaceModeration(req, res, {
+    sql: "UPDATE spaces SET status = 'approved', review_reason = '' WHERE space_id = ?",
+    params: [req.params.id],
+    action: "ACTIVATE_SPACE",
+    details: "เปิดใช้งานพื้นที่อีกครั้ง",
+  });
 });
 
 app.post("/api/admin/issues", verifyToken(), async (req, res) => {
@@ -932,9 +962,40 @@ app.post("/api/admin/issues", verifyToken(), async (req, res) => {
 
 app.put("/api/admin/issues/:id/close", verifyToken("admin"), async (req, res) => {
   try {
-    const resolution = String(req.body.resolution || "").trim();
-    await db.query("UPDATE issues SET closed = 1, resolution = ? WHERE id = ?", [resolution, req.params.id]);
-    await recordAdminLog(req.user.id, req.user.username, "CLOSE_ISSUE", "issue", 0, resolution);
+    const resolution = String((req.body && req.body.resolution) || "").trim();
+    if (!resolution) {
+      return res.status(400).json({ error: "กรุณาระบุผลการแก้ไข" });
+    }
+    const [updateOutcome] = await db.query("UPDATE issues SET closed = 1, resolution = ? WHERE id = ?", [
+      resolution,
+      req.params.id,
+    ]);
+    if (!updateOutcome || updateOutcome.affectedRows === 0) {
+      return res.status(404).json({ error: "ไม่พบรายการแจ้งปัญหา" });
+    }
+    await recordAdminLog(
+      req.user.id,
+      req.user.username,
+      "CLOSE_ISSUE",
+      "issue",
+      req.params.id,
+      `[${req.params.id}] ${resolution}`
+    );
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: safeErrorMessage(err) });
+  }
+});
+
+app.delete("/api/admin/issues/:id", verifyToken("admin"), async (req, res) => {
+  try {
+    const [deleteOutcome] = await db.query("DELETE FROM issues WHERE id = ?", [req.params.id]);
+    if (!deleteOutcome || deleteOutcome.affectedRows === 0) {
+      return res.status(404).json({ error: "ไม่พบรายการแจ้งปัญหา" });
+    }
+    await db.query("DELETE FROM admin_logs WHERE target_type = 'issue' AND details LIKE ?", [
+      `[${req.params.id}]%`,
+    ]);
     return res.json({ ok: true });
   } catch (err) {
     return res.status(500).json({ error: safeErrorMessage(err) });

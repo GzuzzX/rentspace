@@ -183,7 +183,12 @@ test("5. Live HTTP + MySQL integration: Admin multipart payout slip upload & /ap
   uploadedFilePath = path.join(__dirname, "..", "uploads", path.basename(payoutJson.payout_slip_url));
   assert.equal(fs.existsSync(uploadedFilePath), true);
 
-  const staticSlipRes = await fetch(`${hostUrl}${payoutJson.payout_slip_url}`);
+  const unauthSlipRes = await fetch(`${hostUrl}${payoutJson.payout_slip_url}`);
+  assert.equal(unauthSlipRes.status, 401);
+
+  const staticSlipRes = await fetch(`${hostUrl}${payoutJson.payout_slip_url}`, {
+    headers: { Authorization: `Bearer ${adminLoginJson.token}` },
+  });
   assert.equal(staticSlipRes.status, 200);
 
   const ownerLoginRes = await fetch(`${baseUrl}/auth/login`, {
