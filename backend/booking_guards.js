@@ -117,6 +117,16 @@ function hasBlockConflict(blocks, slotStartMs, slotEndMs) {
   });
 }
 
+function toThaiSlotMs(dayParts, minutes) {
+  return buildThaiDate(
+    dayParts.year,
+    dayParts.month,
+    dayParts.day,
+    Math.floor(minutes / 60),
+    minutes % 60
+  ).getTime();
+}
+
 function isSpaceAvailableOnDays(hoursList, blocks, bookingInput) {
   const { dateSpec, days, startMinutes, endMinutes } = bookingInput;
   for (let offset = 0; offset < days; offset += 1) {
@@ -127,20 +137,8 @@ function isSpaceAvailableOnDays(hoursList, blocks, bookingInput) {
     if (!dayHours || !dayHours.open || startMinutes < Number(dayHours.start) || endMinutes > Number(dayHours.end)) {
       return false;
     }
-    const slotStartMs = buildThaiDate(
-      dayParts.year,
-      dayParts.month,
-      dayParts.day,
-      Math.floor(startMinutes / 60),
-      startMinutes % 60
-    ).getTime();
-    const slotEndMs = buildThaiDate(
-      dayParts.year,
-      dayParts.month,
-      dayParts.day,
-      Math.floor(endMinutes / 60),
-      endMinutes % 60
-    ).getTime();
+    const slotStartMs = toThaiSlotMs(dayParts, startMinutes);
+    const slotEndMs = toThaiSlotMs(dayParts, endMinutes);
     if (hasBlockConflict(blocks, slotStartMs, slotEndMs)) return false;
   }
   return true;
@@ -235,24 +233,33 @@ async function executeBookingTransaction(connection, userId, bookingInput) {
   return { status: 201, body: { id: String(inserted.insertId), booking_id: inserted.insertId }, committed: true };
 }
 
-async function createBookingTransactional(db, userId, requestBody) {
-  const parsed = parseBookingInput(requestBody || {});
-  if (parsed.error) return { status: 400, body: { error: parsed.error } };
+async function withTransaction(db, rollbackLabel, runTransaction, hooks = {}) {
   const connection = await db.getConnection();
-  let committed = false;
+  let outcome = null;
   try {
     await connection.beginTransaction();
-    const outcome = await executeBookingTransaction(connection, userId, parsed.bookingInput);
-    committed = Boolean(outcome.committed);
-    return { status: outcome.status, body: outcome.body };
+    outcome = await runTransaction(connection);
+    return outcome;
   } finally {
-    if (!committed) {
+    if (!outcome || !outcome.committed) {
+      if (hooks.onRollback) hooks.onRollback(outcome);
       await connection.rollback().catch((rollbackErr) => {
-        console.warn("Booking rollback warning:", rollbackErr.message);
+        console.warn(`${rollbackLabel} rollback warning:`, rollbackErr.message);
       });
+    } else if (hooks.onCommit) {
+      hooks.onCommit(outcome);
     }
     connection.release();
   }
+}
+
+async function createBookingTransactional(db, userId, requestBody) {
+  const parsed = parseBookingInput(requestBody || {});
+  if (parsed.error) return { status: 400, body: { error: parsed.error } };
+  const outcome = await withTransaction(db, "Booking", (connection) =>
+    executeBookingTransaction(connection, userId, parsed.bookingInput)
+  );
+  return { status: outcome.status, body: outcome.body };
 }
 
 function safeGuardError(err) {
@@ -260,14 +267,10 @@ function safeGuardError(err) {
   return "เกิดข้อผิดพลาดภายในเซิร์ฟเวอร์";
 }
 
-function extractFallbackClockMinutes(rawTimestamp, defaultMinutes) {
-  return extractMinutes(rawTimestamp, defaultMinutes);
-}
-
 function computeBookingStartsAt(bookingRecord) {
   const startIso = toIsoDate(bookingRecord.start_date);
   const [sy, sm, sd] = startIso.split("-").map(Number);
-  const fallbackStartMinutes = extractFallbackClockMinutes(bookingRecord.start_time, 540);
+  const fallbackStartMinutes = extractMinutes(bookingRecord.start_time, 540);
   const startMinutes =
     bookingRecord.start_minutes != null ? Number(bookingRecord.start_minutes) : fallbackStartMinutes;
   return buildThaiDate(sy, sm, sd, Math.floor(startMinutes / 60), startMinutes % 60, 0, 0);
@@ -282,7 +285,7 @@ function computeBookingEndsAt(bookingRecord) {
   const [ey, em, ed] = endIso.split("-").map(Number);
   let fallbackEndMinutes = 660;
   if (bookingRecord.end_time) {
-    const rawMinutes = extractFallbackClockMinutes(bookingRecord.end_time, -1);
+    const rawMinutes = extractMinutes(bookingRecord.end_time, -1);
     if (rawMinutes >= 0) {
       fallbackEndMinutes = rawMinutes === 0 ? 1440 : rawMinutes;
     }
@@ -398,33 +401,29 @@ function hasBookingPermission(user, bookingRecord, accessMode) {
   const userId = Number(user.id);
   const isRenter = Number(bookingRecord.customer_id) === userId;
   const isOwner = Number(bookingRecord.space_owner_id) === userId;
-  switch (accessMode) {
-    case "admin":
-      return user.role === "admin";
-    case "ownerOrAdmin":
-      return isOwner;
-    case "renter":
-      return isRenter;
-    case "participantOrAdmin":
-      return isRenter || isOwner;
-    default:
-      return false;
-  }
+  if (accessMode === "admin") return user.role === "admin";
+  if (accessMode === "ownerOrAdmin") return isOwner;
+  if (accessMode === "renter") return isRenter;
+  return accessMode === "participantOrAdmin" && (isRenter || isOwner);
+}
+
+async function fetchBookingWithOwner(db, bookingId) {
+  const [rows] = await db.query(
+    `SELECT b.*, s.owner_id AS space_owner_id
+     FROM bookings b LEFT JOIN spaces s ON s.space_id = b.space_id
+     WHERE b.booking_id = ? LIMIT 1`,
+    [bookingId]
+  );
+  return rows[0] || null;
 }
 
 function guardBookingAccess(db, options) {
   return async (req, res, next) => {
     try {
-      const [rows] = await db.query(
-        `SELECT b.*, s.owner_id AS space_owner_id
-         FROM bookings b LEFT JOIN spaces s ON s.space_id = b.space_id
-         WHERE b.booking_id = ? LIMIT 1`,
-        [req.params.id]
-      );
-      if (rows.length === 0) {
+      const bookingRecord = await fetchBookingWithOwner(db, req.params.id);
+      if (!bookingRecord) {
         return res.status(404).json({ error: "ไม่พบรายการจอง" });
       }
-      const bookingRecord = rows[0];
       if (!hasBookingPermission(req.user, bookingRecord, options.access)) {
         return res.status(403).json({ error: "ไม่มีสิทธิ์ทำรายการกับการจองนี้" });
       }
@@ -466,16 +465,11 @@ function resolveSlipAccessSpec(requestPath) {
 
 async function authorizeSlipBooking(db, accessSpec, request, response, nextFn) {
   try {
-    const [rows] = await db.query(
-      `SELECT b.*, s.owner_id AS space_owner_id
-       FROM bookings b LEFT JOIN spaces s ON s.space_id = b.space_id
-       WHERE b.booking_id = ? LIMIT 1`,
-      [accessSpec.bookingId]
-    );
-    if (rows.length === 0) {
+    const bookingRecord = await fetchBookingWithOwner(db, accessSpec.bookingId);
+    if (!bookingRecord) {
       return response.status(404).json({ error: "ไม่พบรายการจอง" });
     }
-    if (!hasBookingPermission(request.user, rows[0], accessSpec.accessMode)) {
+    if (!hasBookingPermission(request.user, bookingRecord, accessSpec.accessMode)) {
       return response.status(403).json({ error: "ไม่มีสิทธิ์เข้าถึงไฟล์สลิปนี้" });
     }
     return nextFn();
@@ -544,22 +538,13 @@ async function executeSlipTransaction(connection, slipSpec, fileOps) {
 }
 
 async function submitPaymentSlipTransactional(db, slipSpec, fileOps = fs) {
-  const connection = await db.getConnection();
-  let committed = false;
-  try {
-    await connection.beginTransaction();
-    const outcome = await executeSlipTransaction(connection, slipSpec, fileOps);
-    committed = Boolean(outcome.committed);
-    return { status: outcome.status, body: outcome.body };
-  } finally {
-    if (!committed) {
-      removeUploadedFileSafe(slipSpec.storedFilePath, fileOps);
-      await connection.rollback().catch((rollbackErr) => {
-        console.warn("Slip rollback warning:", rollbackErr.message);
-      });
-    }
-    connection.release();
-  }
+  const outcome = await withTransaction(
+    db,
+    "Slip",
+    (connection) => executeSlipTransaction(connection, slipSpec, fileOps),
+    { onRollback: () => removeUploadedFileSafe(slipSpec.storedFilePath, fileOps) }
+  );
+  return { status: outcome.status, body: outcome.body };
 }
 
 async function applyGuardedBookingUpdate(db, sqlText, queryParams) {
@@ -622,21 +607,10 @@ async function reviewPaymentSlipTransactional(db, reviewSpec) {
   if (validation.error) {
     return { status: 400, body: { error: validation.error } };
   }
-  const connection = await db.getConnection();
-  let committed = false;
-  try {
-    await connection.beginTransaction();
-    const outcome = await executeSlipReviewTransaction(connection, validation.normalizedSpec);
-    committed = Boolean(outcome.committed);
-    return { status: outcome.status, body: outcome.body };
-  } finally {
-    if (!committed) {
-      await connection.rollback().catch((rollbackErr) => {
-        console.warn("Slip review rollback warning:", rollbackErr.message);
-      });
-    }
-    connection.release();
-  }
+  const outcome = await withTransaction(db, "Slip review", (connection) =>
+    executeSlipReviewTransaction(connection, validation.normalizedSpec)
+  );
+  return { status: outcome.status, body: outcome.body };
 }
 
 async function toggleSpaceFavorite(db, userId, spaceId) {
@@ -843,30 +817,23 @@ async function executeSpaceDelete(connection, spaceId, uploadsDir) {
 }
 
 async function deleteSpaceTransactional(db, spaceId, uploadsDir, fileOps = fs) {
-  const connection = await db.getConnection();
-  let committed = false;
-  let uploadPaths = [];
-  try {
-    await connection.beginTransaction();
-    const outcome = await executeSpaceDelete(connection, spaceId, uploadsDir);
-    committed = Boolean(outcome.committed);
-    uploadPaths = outcome.uploadPaths;
-    return { status: outcome.status, body: outcome.body };
-  } finally {
-    if (!committed) {
-      await connection.rollback().catch((rollbackErr) => {
-        console.warn("Space delete rollback warning:", rollbackErr.message);
-      });
-    } else {
-      for (const uploadPath of uploadPaths) {
-        removeUploadedFileSafe(uploadPath, fileOps);
-      }
+  const outcome = await withTransaction(
+    db,
+    "Space delete",
+    (connection) => executeSpaceDelete(connection, spaceId, uploadsDir),
+    {
+      onCommit: (txOutcome) => {
+        for (const uploadPath of txOutcome.uploadPaths) {
+          removeUploadedFileSafe(uploadPath, fileOps);
+        }
+      },
     }
-    connection.release();
-  }
+  );
+  return { status: outcome.status, body: outcome.body };
 }
 
 module.exports = {
+  withTransaction,
   createBookingTransactional,
   computeBookingEndsAt,
   evaluateBookingLifecycleTransition,

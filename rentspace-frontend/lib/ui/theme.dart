@@ -10,19 +10,14 @@ class _Palette {
     required this.base300,
     required this.content,
     required this.primary,
-    required this.onPrimary,
     required this.secondary,
-    required this.onSecondary,
     required this.neutral,
-    required this.info,
-    required this.success,
-    required this.warning,
-    required this.error,
   });
 
-  final Color base100, base200, base300, content;
-  final Color primary, onPrimary, secondary, onSecondary;
-  final Color neutral, info, success, warning, error;
+  final Color base100, base200, base300, content, primary, secondary, neutral;
+  Color get onPrimary => const Color(0xFFFFFFFF);
+  Color get onSecondary => const Color(0xFFFFFFFF);
+  Color get error => const Color(0xFFF14D4C);
 }
 
 const _light = _Palette(
@@ -31,14 +26,8 @@ const _light = _Palette(
   base300: Color(0xFFE4E4E4),
   content: Color(0xFF161616),
   primary: Color(0xFF3C61A7),
-  onPrimary: Color(0xFFFFFFFF),
   secondary: Color(0xFF278733),
-  onSecondary: Color(0xFFFFFFFF),
   neutral: Color(0xFF222222),
-  info: Color(0xFF00AEE9),
-  success: Color(0xFF31AA40),
-  warning: Color(0xFFF0B135),
-  error: Color(0xFFF14D4C),
 );
 
 const _dark = _Palette(
@@ -47,70 +36,48 @@ const _dark = _Palette(
   base300: Color(0xFF262626),
   content: Color(0xFFE4E4E4),
   primary: Color(0xFF6991DC),
-  onPrimary: Color(0xFFFFFFFF),
   secondary: Color(0xFF3A9742),
-  onSecondary: Color(0xFFFFFFFF),
   neutral: Color(0xFFCECECE),
-  info: Color(0xFF00AEE9),
-  success: Color(0xFF31AA40),
-  warning: Color(0xFFF0B135),
-  error: Color(0xFFF14D4C),
 );
 
-TextTheme _textTheme(Color content) => TextTheme(
-  headlineMedium: TextStyle(
-    fontSize: 28,
-    height: 1.25,
-    fontWeight: FontWeight.w800,
-    color: content,
-  ),
-  headlineSmall: TextStyle(
-    fontSize: 22,
-    height: 1.3,
-    fontWeight: FontWeight.w800,
-    color: content,
-  ),
-  titleLarge: TextStyle(
-    fontSize: 20,
-    height: 1.35,
-    fontWeight: FontWeight.w700,
-    color: content,
-  ),
-  titleMedium: TextStyle(
-    fontSize: 16,
-    height: 1.4,
-    fontWeight: FontWeight.w600,
-    color: content,
-  ),
-  titleSmall: TextStyle(
-    fontSize: 14,
-    height: 1.45,
-    fontWeight: FontWeight.w600,
-    color: content,
-  ),
-  bodyLarge: TextStyle(fontSize: 14, height: 1.55, color: content),
-  bodyMedium: TextStyle(fontSize: 14, height: 1.55, color: content),
-  bodySmall: TextStyle(
-    fontSize: 12,
-    height: 1.5,
-    color: content.withValues(alpha: 0.72),
-  ),
-  labelLarge: TextStyle(
-    fontSize: 14,
-    fontWeight: FontWeight.w600,
-    color: content,
-  ),
-  labelMedium: TextStyle(
-    fontSize: 12,
-    fontWeight: FontWeight.w600,
-    color: content.withValues(alpha: 0.72),
-  ),
-  labelSmall: TextStyle(
-    fontSize: 11,
-    fontWeight: FontWeight.w500,
-    color: content.withValues(alpha: 0.72),
-  ),
-);
+TextTheme _textTheme(Color content) {
+  final muted = content.withValues(alpha: 0.72);
+  TextStyle style(
+    double size, {
+    double? height,
+    FontWeight? weight,
+    Color? color,
+  }) => TextStyle(
+    fontSize: size,
+    height: height,
+    fontWeight: weight,
+    color: color ?? content,
+  );
+  return TextTheme(
+    headlineMedium: style(28, height: 1.25, weight: FontWeight.w800),
+    headlineSmall: style(22, height: 1.3, weight: FontWeight.w800),
+    titleLarge: style(20, height: 1.35, weight: FontWeight.w700),
+    titleMedium: style(16, height: 1.4, weight: FontWeight.w600),
+    titleSmall: style(14, height: 1.45, weight: FontWeight.w600),
+    bodyLarge: style(14, height: 1.55),
+    bodyMedium: style(14, height: 1.55),
+    bodySmall: style(12, height: 1.5, color: muted),
+    labelLarge: style(14, weight: FontWeight.w600),
+    labelMedium: style(12, weight: FontWeight.w600, color: muted),
+    labelSmall: style(11, weight: FontWeight.w500, color: muted),
+  );
+}
+
+OutlineInputBorder _inputBorder(Color color, [double width = 1]) =>
+    OutlineInputBorder(
+      borderRadius: BorderRadius.circular(8),
+      borderSide: BorderSide(color: color, width: width),
+    );
+
+WidgetStateProperty<T> _onState<T>(WidgetState state, T active, T inactive) =>
+    WidgetStateProperty.resolveWith(
+      (states) => states.contains(state) ? active : inactive,
+    );
 
 ThemeData buildAppTheme(Brightness brightness) {
   final p = brightness == Brightness.light ? _light : _dark;
@@ -200,42 +167,24 @@ ThemeData buildAppTheme(Brightness brightness) {
         color: p.content.withValues(alpha: 0.62),
       ),
       errorStyle: TextStyle(fontSize: 12, color: p.error),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: BorderSide(color: p.content.withValues(alpha: 0.5)),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: BorderSide(color: p.content.withValues(alpha: 0.5)),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: BorderSide(color: p.primary, width: 1.5),
-      ),
-      errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: BorderSide(color: p.error),
-      ),
-      focusedErrorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: BorderSide(color: p.error, width: 1.5),
-      ),
-      disabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: BorderSide(color: p.base300.withValues(alpha: 0.6)),
-      ),
+      border: _inputBorder(p.content.withValues(alpha: 0.5)),
+      enabledBorder: _inputBorder(p.content.withValues(alpha: 0.5)),
+      focusedBorder: _inputBorder(p.primary, 1.5),
+      errorBorder: _inputBorder(p.error),
+      focusedErrorBorder: _inputBorder(p.error, 1.5),
+      disabledBorder: _inputBorder(p.base300.withValues(alpha: 0.6)),
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: ButtonStyle(
-        backgroundColor: WidgetStateProperty.resolveWith(
-          (states) => states.contains(WidgetState.disabled)
-              ? p.content.withValues(alpha: 0.12)
-              : p.primary,
+        backgroundColor: _onState(
+          WidgetState.disabled,
+          p.content.withValues(alpha: 0.12),
+          p.primary,
         ),
-        foregroundColor: WidgetStateProperty.resolveWith(
-          (states) => states.contains(WidgetState.disabled)
-              ? p.content.withValues(alpha: 0.38)
-              : p.onPrimary,
+        foregroundColor: _onState(
+          WidgetState.disabled,
+          p.content.withValues(alpha: 0.38),
+          p.onPrimary,
         ),
         overlayColor: WidgetStatePropertyAll(
           Colors.white.withValues(alpha: 0.08),
@@ -245,7 +194,7 @@ ThemeData buildAppTheme(Brightness brightness) {
         padding: const WidgetStatePropertyAll(
           EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         ),
-        shape: WidgetStatePropertyAll(const StadiumBorder()),
+        shape: const WidgetStatePropertyAll(StadiumBorder()),
         textStyle: const WidgetStatePropertyAll(
           TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700),
         ),
@@ -254,10 +203,10 @@ ThemeData buildAppTheme(Brightness brightness) {
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: ButtonStyle(
         backgroundColor: WidgetStatePropertyAll(p.base100),
-        foregroundColor: WidgetStateProperty.resolveWith(
-          (states) => states.contains(WidgetState.disabled)
-              ? p.content.withValues(alpha: 0.38)
-              : p.content,
+        foregroundColor: _onState(
+          WidgetState.disabled,
+          p.content.withValues(alpha: 0.38),
+          p.content,
         ),
         side: WidgetStatePropertyAll(BorderSide(color: p.base300)),
         overlayColor: WidgetStatePropertyAll(p.content.withValues(alpha: 0.04)),
@@ -266,7 +215,7 @@ ThemeData buildAppTheme(Brightness brightness) {
         padding: const WidgetStatePropertyAll(
           EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         ),
-        shape: WidgetStatePropertyAll(const StadiumBorder()),
+        shape: const WidgetStatePropertyAll(StadiumBorder()),
         textStyle: const WidgetStatePropertyAll(
           TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
         ),
@@ -389,15 +338,12 @@ ThemeData buildAppTheme(Brightness brightness) {
       ),
     ),
     switchTheme: SwitchThemeData(
-      thumbColor: WidgetStateProperty.resolveWith(
-        (states) => states.contains(WidgetState.selected)
-            ? p.onPrimary
-            : p.content.withValues(alpha: 0.7),
+      thumbColor: _onState(
+        WidgetState.selected,
+        p.onPrimary,
+        p.content.withValues(alpha: 0.7),
       ),
-      trackColor: WidgetStateProperty.resolveWith(
-        (states) =>
-            states.contains(WidgetState.selected) ? p.primary : p.base300,
-      ),
+      trackColor: _onState(WidgetState.selected, p.primary, p.base300),
       trackOutlineColor: const WidgetStatePropertyAll(Colors.transparent),
     ),
     tooltipTheme: TooltipThemeData(

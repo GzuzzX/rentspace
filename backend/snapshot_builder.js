@@ -102,24 +102,18 @@ function mapSpaceRow(row, amenityMap) {
   };
 }
 
+const LEGACY_BOOKING_STATUS_MAP = {
+  pending: "ownerReview",
+  confirmed: "confirmed",
+  completed: "completed",
+  rejected: "ownerRejected",
+  cancelled: "canceled",
+};
+
 function deriveBookingAppStatus(row) {
   if (row.app_status) return row.app_status;
-  switch (row.status) {
-    case "pending":
-      return "ownerReview";
-    case "approved":
-      return row.is_paid ? "confirmed" : "paymentDue";
-    case "confirmed":
-      return "confirmed";
-    case "completed":
-      return "completed";
-    case "rejected":
-      return "ownerRejected";
-    case "cancelled":
-      return "canceled";
-    default:
-      return "ownerReview";
-  }
+  if (row.status === "approved") return row.is_paid ? "confirmed" : "paymentDue";
+  return LEGACY_BOOKING_STATUS_MAP[row.status] || "ownerReview";
 }
 
 function extractNaiveWallClockMinutes(rawText) {

@@ -7,8 +7,8 @@
 | การตรวจ | ผล |
 |---|---|
 | `flutter analyze` (`flutter_lints`) | ผ่าน — `No issues found` |
-| `flutter test` (โหมดออฟไลน์: Logic + Image decode + Widget + Offline domain) | ผ่าน `56` เคส (ข้าม Live Backend API `16` เคสเมื่อไม่เปิด backend เพื่อรองรับการรันออฟไลน์/CI) |
-| `flutter test --dart-define=RUN_LIVE_TESTS=true` (เปิด `backend` ที่ `http://localhost:3001/api`) | ผ่านครบ **72 tests passed** (`0` failed, `0` skipped) |
+| `flutter test` (โหมดออฟไลน์: Logic + Image decode + Widget + Offline domain) | ผ่าน `60` เคส (ข้าม Live Backend API `16` เคสเมื่อไม่เปิด backend เพื่อรองรับการรันออฟไลน์/CI) |
+| `flutter test --dart-define=RUN_LIVE_TESTS=true` (เปิด `backend` ที่ `http://localhost:3001/api`) | ผ่านครบ **76 tests passed** (`0` failed, `0` skipped) |
 | `flutter build web` | ผ่าน — `Built build\web` |
 | `npm test` (ใน `backend/`) | ผ่าน **12 tests passed** (`app.test.js` `7` เคส, `privacy.test.js` `5` เคส) |
 
@@ -31,7 +31,7 @@
 
 ## สิ่งที่ชุดทดสอบและเอกสารตรวจสอบ
 
-- **Widget & UI tests (`29` เคสใน `test/pages/`):** ทดสอบครบ `6` โมดูล (`login_page_test.dart` `6`, `home_page_test.dart` `10`, `reserve_and_confirm_page_test.dart` `3`, `booking_detail_page_test.dart` `5`, `space_form_page_test.dart` `3`, `image_and_responsive_test.dart` `2`) พร้อม Mocktail Controller Bundle (`MockAuth`, `MockSpace`, `MockBooking`, `MockPayment`) ใน `test/fixtures/mock_controllers.dart`
+- **Widget & UI tests (`33` เคสใน `test/pages/`):** ทดสอบครบ `8` ไฟล์ (`login_page_test.dart` `6`, `home/home_renter_test.dart` `6`, `home/home_owner_test.dart` `4`, `home/home_admin_test.dart` `4`, `reserve_and_confirm_page_test.dart` `3`, `booking_detail_page_test.dart` `5`, `space_form_page_test.dart` `3`, `image_and_responsive_test.dart` `2`) พร้อม Mocktail Controller Bundle (`MockAuth`, `MockSpace`, `MockBooking`, `MockPayment`) ใน `test/fixtures/mock_controllers.dart`
 - **Offline Logic unit tests (`24` เคสใน `test/logic/`):** `domain_and_store_test.dart` (`14` เคส: Enums/labels/`holdsTime`/`progressStep`, `BookingStatusFlow.nextStates`/`moveTo`, `Booking` fee/net/dates/deadlines/`deadlineHint`, `Availability` `accepts`/`acceptsRange`/`copy`, `AppUser.phoneLabel`, `Space.hasImage`, formatters พ.ศ./บาท/เวลา, `AppStore` role scoping/`navBadges`/`conflicts`/`refresh`/`poll`/`mutate`/`toggleTheme`/`clearSession`, `RemoteStore.applySnapshot`/`decodeImageSafely`, `ApiClient` HTTP/multipart/error mapping ผ่าน `MockClient`, `TokenService`, และ `buildAppTheme` light/dark) และ `controllers_logic_test.dart` (`10` เคส: validation รวม confirmPassword และ magic bytes ไฟล์สั้น, filtering, slot bounds, race guard ตอน `logoutAsync` ระหว่าง `restoreSessionAsync`, error handling และ API mutations ของ `AuthController`, `BookingController`, `SpaceController`, `PaymentController`)
 - **Image decode & Live/Offline root tests (`19` เคส):** `test/image_decode_test.dart` (`2` เคส) และ `test/unit_test.dart` (`17` เคส: `16` เคส Live Backend API ร่วมกับ MySQL ครอบคลุม login, spaces, favorites, admin approve/suspend/users, booking/payment/slip/review workflow, availability/blocks, issues และการตรวจ input + `1` เคส Offline Domain Rules)
 - **Backend tests (`12` เคสใน `backend/test/`):** `app.test.js` (`7` เคส: Argon2/SHA-256 password verification, role mapping, JWT, live MySQL `/api/state` & `/api/spaces`, multipart upload, security guards/PII leak protection, transactional booking validation) และ `privacy.test.js` (`5` เคส: การซ่อน PII และจำกัด snapshot ตามบทบาท, auth security & token revocation, booking guards/permissions, delete cascade และ auth rate limiter `429`)
@@ -52,8 +52,8 @@ npm start
 cd e:\666\rentspace-frontend
 flutter pub get
 flutter analyze
-flutter test                                    # รันเคสออฟไลน์ 56 เคส (และ Live 16 เคสเมื่อเปิด --dart-define=RUN_LIVE_TESTS=true)
-flutter test --dart-define=RUN_LIVE_TESTS=true  # บังคับรันครบทั้ง 72 เคสกับ http://localhost:3001/api
+flutter test                                    # รันเคสออฟไลน์ 60 เคส (และ Live 16 เคสเมื่อเปิด --dart-define=RUN_LIVE_TESTS=true)
+flutter test --dart-define=RUN_LIVE_TESTS=true  # บังคับรันครบทั้ง 76 เคสกับ http://localhost:3001/api
 flutter build web
 ```
 

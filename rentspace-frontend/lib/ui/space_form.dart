@@ -1,7 +1,5 @@
 import 'dart:typed_data';
-import 'dart:ui' as ui;
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../controllers/space_controller.dart';
@@ -92,42 +90,17 @@ class _SpaceFormState extends State<SpaceForm> {
   Future<void> _chooseImage() async {
     setState(() => _busy = true);
     try {
-      final pickedFile = await FilePicker.pickFile(
-        type: FileType.custom,
-        allowedExtensions: ['jpg', 'jpeg', 'png'],
+      final picked = await pickValidatedImageBytes(
+        context,
+        maxBytes: _maxImageBytes,
+        sizeError: 'ขนาดไฟล์เกิน 5 MB',
       );
-      if (pickedFile == null) return;
-      final fileLength = await pickedFile.length();
-      if (fileLength == null || fileLength > _maxImageBytes) {
-        throw DomainError('ขนาดไฟล์เกิน 5 MB');
-      }
-      final rawBytes = await pickedFile.readAsBytes();
-      if (rawBytes.isEmpty) {
-        throw DomainError('ไฟล์รูปภาพว่างเปล่า');
-      }
-      final codec = await ui.instantiateImageCodec(rawBytes, targetWidth: 1600);
-      try {
-        final frame = await codec.getNextFrame();
-        frame.image.dispose();
-      } finally {
-        codec.dispose();
-      }
-      if (mounted) {
+      if (picked != null && mounted) {
         setState(() {
-          _attachedBytes = rawBytes;
-          _fileName = pickedFile.name;
+          _attachedBytes = picked.bytes;
+          _fileName = picked.name;
           fields[7].text = '';
         });
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              e is DomainError ? e.message : 'เปิดไฟล์ภาพไม่ได้ กรุณาลองใหม่',
-            ),
-          ),
-        );
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -199,31 +172,14 @@ class _SpaceFormState extends State<SpaceForm> {
             widget.space == null ? 'เพิ่มพื้นที่' : 'แก้ไขพื้นที่',
             'ประกาศใหม่และประกาศที่แก้ไขจะรอ Admin ตรวจสอบก่อนแสดงต่อผู้เช่า',
           ),
-          Container(
-            width: double.infinity,
+          NoticeBanner(
+            icon: Icons.info_outline,
+            iconSize: 16,
+            iconColor: scheme.onSurface.withValues(alpha: 0.5),
             margin: const EdgeInsets.only(bottom: 16),
             padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: scheme.surfaceContainerLow,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: scheme.outline),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.info_outline,
-                  size: 16,
-                  color: scheme.onSurface.withValues(alpha: 0.5),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'การจองเดิมยังคงอยู่ และจะไม่ถูกยกเลิกจากการแก้ไขประกาศ',
-                    style: theme.textTheme.bodySmall,
-                  ),
-                ),
-              ],
-            ),
+            textStyle: theme.textTheme.bodySmall,
+            message: 'การจองเดิมยังคงอยู่ และจะไม่ถูกยกเลิกจากการแก้ไขประกาศ',
           ),
           SurfaceCard(
             child: Column(
@@ -290,99 +246,28 @@ class _SpaceFormState extends State<SpaceForm> {
                         ),
                       ),
                       const SizedBox(height: 8),
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: scheme.surfaceContainerLow,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: scheme.outline),
-                        ),
-                        child: Column(
-                          children: [
-                            if (_attachedBytes != null)
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: Image.memory(
-                                  _attachedBytes!,
-                                  height: 220,
-                                  width: double.infinity,
-                                  fit: BoxFit.contain,
-                                  errorBuilder: (_, _, _) => Container(
-                                    height: 100,
-                                    alignment: Alignment.center,
-                                    child: Text(
-                                      'ไม่สามารถเปิดภาพได้',
-                                      style: theme.textTheme.bodySmall,
-                                    ),
-                                  ),
-                                ),
-                              )
-                            else if (_previewImageUrl case final previewUrl?)
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: Image.network(
-                                  previewUrl,
-                                  height: 220,
-                                  width: double.infinity,
-                                  fit: BoxFit.contain,
-                                  errorBuilder: (_, _, _) => Container(
-                                    height: 100,
-                                    alignment: Alignment.center,
-                                    child: Text(
-                                      'ไม่สามารถโหลดตัวอย่างภาพจากลิงก์นี้',
-                                      style: theme.textTheme.bodySmall,
-                                    ),
-                                  ),
-                                ),
-                              )
-                            else ...[
-                              Icon(
-                                Icons.image_outlined,
-                                size: 36,
-                                color: scheme.onSurface.withValues(alpha: 0.35),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                'เลือกภาพ JPG / PNG ไม่เกิน 5 MB\nเพื่อแสดงในหน้าค้นหาและรายละเอียดพื้นที่',
-                                textAlign: TextAlign.center,
-                                style: theme.textTheme.bodySmall,
-                              ),
-                            ],
-                            if (_fileName.isNotEmpty) ...[
-                              const SizedBox(height: 8),
-                              Text(
-                                _fileName,
-                                style: theme.textTheme.labelSmall,
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          OutlinedButton.icon(
-                            onPressed: _busy ? null : _chooseImage,
-                            icon: const Icon(Icons.image_outlined, size: 18),
-                            label: Text(
-                              _busy
-                                  ? 'กำลังอ่านภาพ...'
-                                  : (_attachedBytes != null ||
-                                            fields[7].text.trim().isNotEmpty
-                                        ? 'เปลี่ยนภาพ'
-                                        : 'เลือกภาพพื้นที่'),
-                            ),
-                          ),
-                          if (_attachedBytes != null ||
-                              fields[7].text.trim().isNotEmpty)
-                            TextButton.icon(
-                              onPressed: _busy ? null : _clearImage,
-                              icon: const Icon(Icons.delete_outline, size: 18),
-                              label: const Text('ลบภาพ'),
-                            ),
+                      ImagePickerBox(
+                        busy: _busy,
+                        bytes: _attachedBytes,
+                        previewUrl: _previewImageUrl,
+                        fileName: _fileName,
+                        emptyIconSize: 36,
+                        fullWidthPreview: true,
+                        urlErrorText: 'ไม่สามารถโหลดตัวอย่างภาพจากลิงก์นี้',
+                        emptyText:
+                            'เลือกภาพ JPG / PNG ไม่เกิน 5 MB\nเพื่อแสดงในหน้าค้นหาและรายละเอียดพื้นที่',
+                        pickLabel:
+                            _attachedBytes != null ||
+                                fields[7].text.trim().isNotEmpty
+                            ? 'เปลี่ยนภาพ'
+                            : 'เลือกภาพพื้นที่',
+                        onPick: _chooseImage,
+                        onClear:
+                            _attachedBytes != null ||
+                                fields[7].text.trim().isNotEmpty
+                            ? _clearImage
+                            : null,
+                        extraActions: [
                           if (!_showUrlOption)
                             TextButton(
                               onPressed: () =>

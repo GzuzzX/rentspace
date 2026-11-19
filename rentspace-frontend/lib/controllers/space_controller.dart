@@ -69,8 +69,10 @@ class SpaceController {
       throw DomainError('กรอกข้อมูลให้ครบ ราคาและความจุต้องมากกว่า 0');
     }
     if (imageBytes != null) {
-      final ext = imageBytes.length > 3 && imageBytes[0] == 137 ? 'png' : 'jpg';
-      PaymentController.validateSlip('space.$ext', imageBytes);
+      PaymentController.validateSlip(
+        'space.${_isPng(imageBytes) ? 'png' : 'jpg'}',
+        imageBytes,
+      );
     }
     final trimmedImage = image.trim();
     if (trimmedImage.isNotEmpty && !trimmedImage.startsWith('/api/spaces/')) {
@@ -109,7 +111,7 @@ class SpaceController {
   }) {
     final encodedImage = imageBytes == null
         ? image.trim()
-        : 'data:image/${imageBytes.length > 3 && imageBytes[0] == 137 ? 'png' : 'jpeg'};base64,${base64Encode(imageBytes)}';
+        : 'data:image/${_isPng(imageBytes) ? 'png' : 'jpeg'};base64,${base64Encode(imageBytes)}';
     final hours = (id == null ? Availability() : _store.space(id).availability)
         .days
         .map((d) => {'open': d.open, 'start': d.start, 'end': d.end})
@@ -246,12 +248,10 @@ class SpaceController {
     return filtered;
   }
 
-  bool _isOwnerActive(String ownerId) {
-    for (final user in _store.users) {
-      if (user.id == ownerId) return user.active;
-    }
-    return false;
-  }
+  bool _isPng(Uint8List bytes) => bytes.length > 3 && bytes[0] == 137;
+
+  bool _isOwnerActive(String ownerId) =>
+      _store.maybeUser(ownerId)?.active ?? false;
 
   bool _matchesFilter(
     Space space, {
@@ -306,23 +306,16 @@ class SpaceController {
   int reviewCountFor(String spaceId) {
     final reviews = reviewsFor(spaceId);
     if (reviews.isNotEmpty) return reviews.length;
-    for (final space in _store.spaces) {
-      if (space.id == spaceId) return space.dbReviewCount;
-    }
-    return 0;
+    return _store.maybeSpace(spaceId)?.dbReviewCount ?? 0;
   }
 
   double? averageRating(String spaceId) {
     final reviews = reviewsFor(spaceId);
     if (reviews.isNotEmpty) {
-      final sum = reviews.fold<int>(0, (total, r) => total + r.rating);
-      return sum / reviews.length;
+      return reviews.fold<int>(0, (total, r) => total + r.rating) /
+          reviews.length;
     }
-    for (final space in _store.spaces) {
-      if (space.id == spaceId && space.dbReviewCount > 0) {
-        return space.dbRating;
-      }
-    }
-    return null;
+    final found = _store.maybeSpace(spaceId);
+    return found != null && found.dbReviewCount > 0 ? found.dbRating : null;
   }
 }

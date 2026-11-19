@@ -47,6 +47,22 @@ class _LoginPageState extends State<LoginPage> {
     }
   });
 
+  Widget _visibilityToggle(
+    bool visible,
+    String showLabel,
+    String hideLabel,
+    VoidCallback onToggle,
+  ) => IconButton(
+    tooltip: visible ? hideLabel : showLabel,
+    padding: EdgeInsets.zero,
+    constraints: const BoxConstraints.tightFor(width: 44, height: 44),
+    onPressed: onToggle,
+    icon: Icon(
+      visible ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+      size: 18,
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -102,37 +118,22 @@ class _LoginPageState extends State<LoginPage> {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             if (widget.store.syncError != null)
-                              Container(
+                              NoticeBanner(
+                                icon: Icons.error_outline_rounded,
+                                message: widget.store.syncError!,
+                                tone: BadgeTone.danger,
+                                iconColor: scheme.error,
+                                bgAlpha: 0.08,
+                                borderAlpha: 0.3,
+                                radius: 10,
                                 margin: const EdgeInsets.only(bottom: 18),
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 12,
                                   vertical: 10,
                                 ),
-                                decoration: BoxDecoration(
-                                  color: scheme.error.withValues(alpha: 0.08),
-                                  borderRadius: BorderRadius.circular(10),
-                                  border: Border.all(
-                                    color: scheme.error.withValues(alpha: 0.3),
-                                  ),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Icon(
-                                      Icons.error_outline_rounded,
-                                      size: 18,
-                                      color: scheme.error,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Text(
-                                        widget.store.syncError!,
-                                        style: TextStyle(
-                                          fontSize: 12.5,
-                                          color: scheme.error,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
+                                textStyle: TextStyle(
+                                  fontSize: 12.5,
+                                  color: scheme.error,
                                 ),
                               ),
                             Row(
@@ -246,20 +247,12 @@ class _LoginPageState extends State<LoginPage> {
                                   : TextInputAction.done,
                               onSubmitted: register ? null : (_) => submit(),
                               autocorrect: false,
-                              suffix: IconButton(
-                                tooltip: showPassword ? 'ซ่อนรหัสผ่าน' : 'แสดงรหัสผ่าน',
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints.tightFor(
-                                  width: 44,
-                                  height: 44,
-                                ),
-                                onPressed: () =>
-                                    setState(() => showPassword = !showPassword),
-                                icon: Icon(
-                                  showPassword
-                                      ? Icons.visibility_off_outlined
-                                      : Icons.visibility_outlined,
-                                  size: 18,
+                              suffix: _visibilityToggle(
+                                showPassword,
+                                'แสดงรหัสผ่าน',
+                                'ซ่อนรหัสผ่าน',
+                                () => setState(
+                                  () => showPassword = !showPassword,
                                 ),
                               ),
                             ),
@@ -273,23 +266,13 @@ class _LoginPageState extends State<LoginPage> {
                                 textInputAction: TextInputAction.done,
                                 onSubmitted: (_) => submit(),
                                 autocorrect: false,
-                                suffix: IconButton(
-                                  tooltip: showConfirmPassword
-                                      ? 'ซ่อนยืนยันรหัสผ่าน'
-                                      : 'แสดงยืนยันรหัสผ่าน',
-                                  padding: EdgeInsets.zero,
-                                  constraints: const BoxConstraints.tightFor(
-                                    width: 44,
-                                    height: 44,
-                                  ),
-                                  onPressed: () => setState(
-                                    () => showConfirmPassword = !showConfirmPassword,
-                                  ),
-                                  icon: Icon(
-                                    showConfirmPassword
-                                        ? Icons.visibility_off_outlined
-                                        : Icons.visibility_outlined,
-                                    size: 18,
+                                suffix: _visibilityToggle(
+                                  showConfirmPassword,
+                                  'แสดงยืนยันรหัสผ่าน',
+                                  'ซ่อนยืนยันรหัสผ่าน',
+                                  () => setState(
+                                    () => showConfirmPassword =
+                                        !showConfirmPassword,
                                   ),
                                 ),
                               ),

@@ -1,9 +1,33 @@
 import 'dart:async';
+import 'dart:ui' as ui;
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/domain.dart';
 
 bool _performing = false;
+
+void showToast(BuildContext context, String message, {Duration? duration}) {
+  if (!context.mounted) return;
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(message),
+      duration: duration ?? const Duration(milliseconds: 4000),
+    ),
+  );
+}
+
+void copyToClipboard(
+  BuildContext context,
+  String text,
+  String message, {
+  Duration? duration,
+}) {
+  unawaited(Clipboard.setData(ClipboardData(text: text)));
+  showToast(context, message, duration: duration);
+}
 
 Future<bool> perform(
   BuildContext context,
@@ -24,26 +48,14 @@ Future<bool> perform(
   overlay?.insert(loading);
   try {
     await action();
-    if (success != null && context.mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(success)));
-    }
+    if (success != null && context.mounted) showToast(context, success);
     return true;
   } on DomainError catch (e) {
-    if (context.mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(e.message)));
-    }
+    if (context.mounted) showToast(context, e.message);
     return false;
   } catch (_) {
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('เกิดข้อผิดพลาดในการดำเนินการ กรุณาลองใหม่อีกครั้ง'),
-        ),
-      );
+      showToast(context, 'เกิดข้อผิดพลาดในการดำเนินการ กรุณาลองใหม่อีกครั้ง');
     }
     return false;
   } finally {
@@ -51,6 +63,17 @@ Future<bool> perform(
     loading.dispose();
     _performing = false;
   }
+}
+
+Future<bool> performWithReason(
+  BuildContext context,
+  String title,
+  FutureOr<dynamic> Function(String reason) action, [
+  String? success,
+]) async {
+  final reason = await askReason(context, title);
+  if (reason == null || !context.mounted) return false;
+  return perform(context, () => action(reason), success);
 }
 
 Future<String?> askReason(BuildContext context, String title) async {
@@ -205,6 +228,35 @@ class ThemeToggle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    Widget option(IconData icon, String tip, bool selected, bool mode) =>
+        Tooltip(
+          message: tip,
+          child: Material(
+            color: selected ? scheme.surface : Colors.transparent,
+            borderRadius: BorderRadius.circular(6),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(6),
+              onTap: () => onChanged(mode),
+              child: Container(
+                width: 30,
+                height: 26,
+                decoration: selected
+                    ? BoxDecoration(
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: scheme.outline),
+                      )
+                    : null,
+                child: Icon(
+                  icon,
+                  size: 16,
+                  color: selected
+                      ? scheme.primary
+                      : scheme.onSurface.withValues(alpha: 0.5),
+                ),
+              ),
+            ),
+          ),
+        );
     return Container(
       padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
@@ -215,64 +267,10 @@ class ThemeToggle extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _ThemeOption(
-            icon: Icons.light_mode_outlined,
-            tooltip: 'โหมดสว่าง',
-            selected: !dark,
-            onTap: () => onChanged(false),
-          ),
+          option(Icons.light_mode_outlined, 'โหมดสว่าง', !dark, false),
           const SizedBox(width: 2),
-          _ThemeOption(
-            icon: Icons.dark_mode_outlined,
-            tooltip: 'โหมดมืด',
-            selected: dark,
-            onTap: () => onChanged(true),
-          ),
+          option(Icons.dark_mode_outlined, 'โหมดมืด', dark, true),
         ],
-      ),
-    );
-  }
-}
-
-class _ThemeOption extends StatelessWidget {
-  const _ThemeOption({
-    required this.icon,
-    required this.tooltip,
-    required this.selected,
-    required this.onTap,
-  });
-  final IconData icon;
-  final String tooltip;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    final color = selected
-        ? scheme.primary
-        : scheme.onSurface.withValues(alpha: 0.5);
-    return Tooltip(
-      message: tooltip,
-      child: Material(
-        color: selected ? scheme.surface : Colors.transparent,
-        borderRadius: BorderRadius.circular(6),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(6),
-          onTap: onTap,
-          child: Container(
-            width: 30,
-            height: 26,
-            decoration: selected
-                ? BoxDecoration(
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: scheme.outline),
-                  )
-                : null,
-            child: Icon(icon, size: 16, color: color),
-          ),
-        ),
       ),
     );
   }
@@ -464,6 +462,49 @@ class TabStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    Widget tabItem(int i, {bool centered = false}) {
+      final isSelected = i == selected;
+      return DecoratedBox(
+        decoration: isSelected
+            ? BoxDecoration(
+                color: scheme.surface,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: scheme.outline),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.05),
+                    blurRadius: 6,
+                    offset: const Offset(0, 1),
+                  ),
+                ],
+              )
+            : BoxDecoration(borderRadius: BorderRadius.circular(8)),
+        child: Material(
+          type: MaterialType.transparency,
+          borderRadius: BorderRadius.circular(8),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () => onChanged(i),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+              alignment: centered ? Alignment.center : null,
+              child: Text(
+                labels[i],
+                textAlign: centered ? TextAlign.center : TextAlign.start,
+                style: TextStyle(
+                  fontSize: 13.5,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                  color: isSelected
+                      ? scheme.onSurface
+                      : scheme.onSurface.withValues(alpha: 0.58),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     return Container(
       margin: margin,
       padding: const EdgeInsets.all(4),
@@ -477,86 +518,15 @@ class TabStrip extends StatelessWidget {
               children: [
                 for (var i = 0; i < labels.length; i++) ...[
                   if (i > 0) const SizedBox(width: 4),
-                  Expanded(
-                    child: _TabItem(
-                      label: labels[i],
-                      selected: i == selected,
-                      centered: true,
-                      onTap: () => onChanged(i),
-                    ),
-                  ),
+                  Expanded(child: tabItem(i, centered: true)),
                 ],
               ],
             )
           : Wrap(
               spacing: 4,
               runSpacing: 4,
-              children: [
-                for (var i = 0; i < labels.length; i++)
-                  _TabItem(
-                    label: labels[i],
-                    selected: i == selected,
-                    onTap: () => onChanged(i),
-                  ),
-              ],
+              children: [for (var i = 0; i < labels.length; i++) tabItem(i)],
             ),
-    );
-  }
-}
-
-class _TabItem extends StatelessWidget {
-  const _TabItem({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-    this.centered = false,
-  });
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  final bool centered;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return DecoratedBox(
-      decoration: selected
-          ? BoxDecoration(
-              color: scheme.surface,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: scheme.outline),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05),
-                  blurRadius: 6,
-                  offset: const Offset(0, 1),
-                ),
-              ],
-            )
-          : BoxDecoration(borderRadius: BorderRadius.circular(8)),
-      child: Material(
-        type: MaterialType.transparency,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-            alignment: centered ? Alignment.center : null,
-            child: Text(
-              label,
-              textAlign: centered ? TextAlign.center : TextAlign.start,
-              style: TextStyle(
-                fontSize: 13.5,
-                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                color: selected
-                    ? scheme.onSurface
-                    : scheme.onSurface.withValues(alpha: 0.58),
-              ),
-            ),
-          ),
-        ),
-      ),
     );
   }
 }
@@ -583,32 +553,24 @@ Widget empty(String text) => Padding(
   ),
 );
 
-Widget heading(String title, [String? subtitle]) =>
-    _Heading(title: title, subtitle: subtitle);
-
-class _Heading extends StatelessWidget {
-  const _Heading({required this.title, this.subtitle});
-  final String title;
-  final String? subtitle;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 20),
-      child: Column(
+Widget heading(String title, [String? subtitle]) => Padding(
+  padding: const EdgeInsets.only(bottom: 20),
+  child: Builder(
+    builder: (context) {
+      final theme = Theme.of(context);
+      return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(title, style: theme.textTheme.headlineSmall),
           if (subtitle != null) ...[
             const SizedBox(height: 4),
-            Text(subtitle!, style: theme.textTheme.bodySmall),
+            Text(subtitle, style: theme.textTheme.bodySmall),
           ],
         ],
-      ),
-    );
-  }
-}
+      );
+    },
+  ),
+);
 
 Widget formInput(
   TextEditingController controller,
@@ -671,6 +633,54 @@ class PageBody extends StatelessWidget {
   );
 }
 
+Widget _buildMediaImage({
+  required Uint8List? bytes,
+  required String url,
+  required double? height,
+  required double? width,
+  required BoxFit fit,
+  required Widget? fallback,
+  Map<String, String>? headers,
+  bool showLoading = false,
+}) {
+  final err = fallback ?? const Text('ไม่สามารถเปิดภาพได้');
+  if (bytes != null && bytes.isNotEmpty) {
+    return Image.memory(
+      bytes,
+      height: height,
+      width: width,
+      fit: fit,
+      errorBuilder: (_, _, _) => err,
+    );
+  }
+  if (url.isNotEmpty) {
+    return Image.network(
+      url,
+      height: height,
+      width: width,
+      fit: fit,
+      headers: headers,
+      loadingBuilder: !showLoading
+          ? null
+          : (_, child, progress) => progress == null
+              ? child
+              : SizedBox(
+                  height: height,
+                  width: width,
+                  child: const Center(
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ),
+                ),
+      errorBuilder: (_, _, _) => err,
+    );
+  }
+  return err;
+}
+
 class SlipImage extends StatelessWidget {
   const SlipImage(
     this.slip, {
@@ -688,29 +698,15 @@ class SlipImage extends StatelessWidget {
   final Map<String, String>? headers;
 
   @override
-  Widget build(BuildContext context) {
-    final err = fallback ?? const Text('ไม่สามารถเปิดภาพได้');
-    if (slip.bytes.isNotEmpty) {
-      return Image.memory(
-        slip.bytes,
-        height: height,
-        width: width,
-        fit: fit,
-        errorBuilder: (_, _, _) => err,
-      );
-    }
-    if (slip.imageUrl.isNotEmpty) {
-      return Image.network(
-        slip.imageUrl,
-        height: height,
-        width: width,
-        fit: fit,
-        headers: headers,
-        errorBuilder: (_, _, _) => err,
-      );
-    }
-    return err;
-  }
+  Widget build(BuildContext context) => _buildMediaImage(
+    bytes: slip.bytes,
+    url: slip.imageUrl,
+    height: height,
+    width: width,
+    fit: fit,
+    fallback: fallback,
+    headers: headers,
+  );
 }
 
 class SpaceImage extends StatelessWidget {
@@ -730,43 +726,311 @@ class SpaceImage extends StatelessWidget {
   final bool showLoading;
 
   @override
+  Widget build(BuildContext context) => _buildMediaImage(
+    bytes: space.imageBytes,
+    url: space.image,
+    height: height,
+    width: width,
+    fit: fit,
+    fallback: fallback,
+    showLoading: showLoading,
+  );
+}
+
+class CopyIconButton extends StatelessWidget {
+  const CopyIconButton({
+    super.key,
+    required this.text,
+    required this.message,
+    this.size = 13,
+    this.padding = const EdgeInsets.all(2),
+    this.duration = const Duration(seconds: 2),
+  });
+  final String text, message;
+  final double size;
+  final EdgeInsetsGeometry padding;
+  final Duration? duration;
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+    borderRadius: BorderRadius.circular(4),
+    onTap: () => copyToClipboard(context, text, message, duration: duration),
+    child: Padding(
+      padding: padding,
+      child: Icon(
+        Icons.copy_outlined,
+        size: size,
+        color: Theme.of(context).colorScheme.primary,
+      ),
+    ),
+  );
+}
+
+class NoticeBanner extends StatelessWidget {
+  const NoticeBanner({
+    super.key,
+    required this.icon,
+    required this.message,
+    this.tone,
+    this.iconColor,
+    this.borderAlpha,
+    this.bgAlpha = 0.12,
+    this.useErrorContainer = false,
+    this.margin = EdgeInsets.zero,
+    this.padding = const EdgeInsets.all(10),
+    this.radius = 8,
+    this.iconSize = 18,
+    this.textStyle,
+    this.trailing,
+    this.chips = const [],
+  });
+  final IconData icon;
+  final String message;
+  final BadgeTone? tone;
+  final Color? iconColor;
+  final double? borderAlpha;
+  final double bgAlpha, radius, iconSize;
+  final bool useErrorContainer;
+  final EdgeInsetsGeometry margin, padding;
+  final TextStyle? textStyle;
+  final Widget? trailing;
+  final List<Widget> chips;
+
+  @override
   Widget build(BuildContext context) {
-    final err = fallback ?? const Text('ไม่สามารถเปิดภาพได้');
-    final bytes = space.imageBytes;
-    if (bytes != null && bytes.isNotEmpty) {
-      return Image.memory(
-        bytes,
-        height: height,
-        width: width,
-        fit: fit,
-        errorBuilder: (_, _, _) => err,
+    final scheme = Theme.of(context).colorScheme;
+    final fg = tone != null
+        ? toneColor(context, tone!)
+        : (useErrorContainer ? scheme.error : scheme.onSurface);
+    final bg = useErrorContainer
+        ? scheme.errorContainer.withValues(alpha: bgAlpha)
+        : (tone != null
+              ? fg.withValues(alpha: bgAlpha)
+              : scheme.surfaceContainerLow);
+    final border = borderAlpha != null
+        ? fg.withValues(alpha: borderAlpha!)
+        : (tone == null && !useErrorContainer ? scheme.outline : null);
+    final row = Row(
+      children: [
+        Icon(
+          icon,
+          size: iconSize,
+          color:
+              iconColor ??
+              (tone == null && !useErrorContainer ? scheme.primary : fg),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            message,
+            style:
+                textStyle ??
+                TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fg),
+          ),
+        ),
+        ?trailing,
+      ],
+    );
+    return Container(
+      width: double.infinity,
+      margin: margin,
+      padding: padding,
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(radius),
+        border: border != null ? Border.all(color: border) : null,
+      ),
+      child: chips.isEmpty
+          ? row
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                row,
+                const SizedBox(height: 8),
+                Wrap(spacing: 6, runSpacing: 6, children: chips),
+              ],
+            ),
+    );
+  }
+}
+
+class StatGrid extends StatelessWidget {
+  const StatGrid({super.key, required this.tiles, this.desktopWidth = 230});
+  final List<StatTile> tiles;
+  final double desktopWidth;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (_, constraints) {
+      final tileWidth = constraints.maxWidth < 400
+          ? (constraints.maxWidth - 12) / 2
+          : desktopWidth;
+      return Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        children: [
+          for (final tile in tiles) SizedBox(width: tileWidth, child: tile),
+        ],
+      );
+    },
+  );
+}
+
+typedef PickedImageFile = ({String name, Uint8List bytes});
+
+Future<PickedImageFile?> pickValidatedImageBytes(
+  BuildContext context, {
+  int maxBytes = 5 * 1024 * 1024,
+  String sizeError = 'อ่านขนาดไฟล์ไม่ได้ หรือไฟล์เกิน 5 MB',
+  void Function(String name, Uint8List bytes)? validate,
+}) async {
+  try {
+    final picked = await FilePicker.pickFile(
+      type: FileType.custom,
+      allowedExtensions: ['jpg', 'jpeg', 'png'],
+    );
+    if (picked == null) return null;
+    final length = await picked.length();
+    if (length == null || length > maxBytes) throw DomainError(sizeError);
+    final rawBytes = await picked.readAsBytes();
+    if (validate != null) {
+      validate(picked.name, rawBytes);
+    } else if (rawBytes.isEmpty) {
+      throw DomainError('ไฟล์รูปภาพว่างเปล่า');
+    }
+    final codec = await ui.instantiateImageCodec(rawBytes, targetWidth: 1600);
+    try {
+      final frame = await codec.getNextFrame();
+      frame.image.dispose();
+    } finally {
+      codec.dispose();
+    }
+    return (name: picked.name, bytes: rawBytes);
+  } catch (err) {
+    if (context.mounted) {
+      showToast(
+        context,
+        err is DomainError ? err.message : 'เปิดไฟล์ภาพไม่ได้ กรุณาลองใหม่',
       );
     }
-    if (space.image.isNotEmpty) {
-      return Image.network(
-        space.image,
-        height: height,
-        width: width,
-        fit: fit,
-        loadingBuilder: !showLoading
-            ? null
-            : (_, child, progress) {
-                if (progress == null) return child;
-                return SizedBox(
-                  height: height,
-                  width: width,
-                  child: const Center(
-                    child: SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+    return null;
+  }
+}
+
+class ImagePickerBox extends StatelessWidget {
+  const ImagePickerBox({
+    super.key,
+    required this.busy,
+    required this.onPick,
+    required this.pickLabel,
+    required this.emptyText,
+    this.bytes,
+    this.previewUrl,
+    this.fileName = '',
+    this.emptyIcon = Icons.image_outlined,
+    this.emptyIconSize = 34,
+    this.previewHeight = 220,
+    this.boxPadding = const EdgeInsets.all(16),
+    this.fullWidthPreview = false,
+    this.urlErrorText = 'ไม่สามารถเปิดภาพได้',
+    this.pickKey,
+    this.clearKey,
+    this.onClear,
+    this.extraActions = const [],
+  });
+  final bool busy, fullWidthPreview;
+  final VoidCallback onPick;
+  final VoidCallback? onClear;
+  final Uint8List? bytes;
+  final String? previewUrl;
+  final String pickLabel, emptyText, fileName, urlErrorText;
+  final IconData emptyIcon;
+  final double emptyIconSize, previewHeight;
+  final EdgeInsetsGeometry boxPadding;
+  final Key? pickKey, clearKey;
+  final List<Widget> extraActions;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    Widget previewError(String msg) => fullWidthPreview
+        ? Container(
+            height: 100,
+            alignment: Alignment.center,
+            child: Text(msg, style: theme.textTheme.bodySmall),
+          )
+        : Text(msg);
+    final hasNetwork = previewUrl != null && previewUrl!.isNotEmpty;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: boxPadding,
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: scheme.outline),
+          ),
+          child: Column(
+            children: [
+              if (bytes != null || hasNetwork)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: _buildMediaImage(
+                    bytes: bytes,
+                    url: previewUrl ?? '',
+                    height: previewHeight,
+                    width: fullWidthPreview ? double.infinity : null,
+                    fit: BoxFit.contain,
+                    fallback: previewError(
+                      bytes != null ? 'ไม่สามารถเปิดภาพได้' : urlErrorText,
                     ),
                   ),
-                );
-              },
-        errorBuilder: (_, _, _) => err,
-      );
-    }
-    return err;
+                )
+              else ...[
+                Icon(
+                  emptyIcon,
+                  size: emptyIconSize,
+                  color: scheme.onSurface.withValues(alpha: 0.35),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  emptyText,
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodySmall,
+                ),
+              ],
+              if (fileName.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(fileName, style: theme.textTheme.labelSmall),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            OutlinedButton.icon(
+              key: pickKey,
+              onPressed: busy ? null : onPick,
+              icon: const Icon(Icons.image_outlined, size: 18),
+              label: Text(busy ? 'กำลังอ่านภาพ...' : pickLabel),
+            ),
+            if (onClear != null)
+              TextButton.icon(
+                key: clearKey,
+                onPressed: busy ? null : onClear,
+                icon: const Icon(Icons.delete_outline, size: 18),
+                label: const Text('ลบภาพ'),
+              ),
+            ...extraActions,
+          ],
+        ),
+      ],
+    );
   }
 }

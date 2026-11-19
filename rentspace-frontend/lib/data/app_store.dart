@@ -56,8 +56,7 @@ class AppStore extends ChangeNotifier {
     return future;
   }
 
-  Future<dynamic> mutate(String method, String path, [Object? body]) async {
-    final response = await api.request(method, path, body);
+  Future<void> refreshAfterMutation() async {
     try {
       await refresh();
     } on DomainError {
@@ -65,6 +64,11 @@ class AppStore extends ChangeNotifier {
         'บันทึกแล้ว แต่โหลดข้อมูลล่าสุดไม่ได้ กรุณารีเฟรชก่อนทำรายการซ้ำ',
       );
     }
+  }
+
+  Future<dynamic> mutate(String method, String path, [Object? body]) async {
+    final response = await api.request(method, path, body);
+    await refreshAfterMutation();
     return response;
   }
 
@@ -112,31 +116,18 @@ class AppStore extends ChangeNotifier {
     return user;
   }
 
-  Space space(String id) => spaces.firstWhere(
-    (s) => s.id == id,
-    orElse: () => throw DomainError('ไม่พบพื้นที่'),
-  );
-  Booking booking(String id) => bookings.firstWhere(
-    (b) => b.id == id,
-    orElse: () => throw DomainError('ไม่พบการจอง'),
-  );
-  Booking? maybeBooking(String id) {
-    for (final entry in bookings) {
-      if (entry.id == id) return entry;
-    }
-    return null;
-  }
-
-  AppUser user(String id) => users.firstWhere(
-    (u) => u.id == id,
-    orElse: () => throw DomainError('ไม่พบบัญชี'),
-  );
-  AppUser? maybeUser(String id) {
-    for (final entry in users) {
-      if (entry.id == id) return entry;
-    }
-    return null;
-  }
+  Space? maybeSpace(String id) =>
+      spaces.where((s) => s.id == id).firstOrNull;
+  Space space(String id) =>
+      maybeSpace(id) ?? (throw DomainError('ไม่พบพื้นที่'));
+  Booking? maybeBooking(String id) =>
+      bookings.where((b) => b.id == id).firstOrNull;
+  Booking booking(String id) =>
+      maybeBooking(id) ?? (throw DomainError('ไม่พบการจอง'));
+  AppUser? maybeUser(String id) =>
+      users.where((u) => u.id == id).firstOrNull;
+  AppUser user(String id) =>
+      maybeUser(id) ?? (throw DomainError('ไม่พบบัญชี'));
 
   List<Booking> visibleBookings() {
     final u = requireUser();

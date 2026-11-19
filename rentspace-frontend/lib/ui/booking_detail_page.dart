@@ -1,9 +1,7 @@
 import 'dart:async';
-import 'dart:ui' as ui;
+import 'dart:typed_data';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../controllers/booking_controller.dart';
 import '../controllers/payment_controller.dart';
@@ -92,47 +90,16 @@ class _BookingProgressBar extends StatelessWidget {
   }
 }
 
-typedef SlipPickResult = ({String name, Uint8List bytes});
+typedef SlipPickResult = PickedImageFile;
 typedef SlipPickerFn = Future<SlipPickResult?> Function(BuildContext context);
 
 /// เลือกรูปภาพสลิป JPG/PNG และตรวจความถูกต้องของขนาดและไฟล์ก่อนใช้งาน
-Future<SlipPickResult?> pickValidatedSlipImage(BuildContext context) async {
-  try {
-    final pickedFile = await FilePicker.pickFile(
-      type: FileType.custom,
-      allowedExtensions: ['jpg', 'jpeg', 'png'],
+Future<SlipPickResult?> pickValidatedSlipImage(BuildContext context) =>
+    pickValidatedImageBytes(
+      context,
+      maxBytes: PaymentController.maxBytes,
+      validate: PaymentController.validateSlip,
     );
-    if (pickedFile == null) return null;
-    final size = await pickedFile.length();
-    if (size == null || size > PaymentController.maxBytes) {
-      throw DomainError('อ่านขนาดไฟล์ไม่ได้ หรือไฟล์เกิน 5 MB');
-    }
-    final pickedBytes = await pickedFile.readAsBytes();
-    PaymentController.validateSlip(pickedFile.name, pickedBytes);
-    // Decode image header/frame to prevent renamed non-image files.
-    final codec = await ui.instantiateImageCodec(pickedBytes, targetWidth: 1600);
-    try {
-      final frame = await codec.getNextFrame();
-      frame.image.dispose();
-    } finally {
-      codec.dispose();
-    }
-    return (name: pickedFile.name, bytes: pickedBytes);
-  } catch (err) {
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            err is DomainError
-                ? err.message
-                : 'เปิดไฟล์ภาพไม่ได้ กรุณาลองใหม่',
-          ),
-        ),
-      );
-    }
-    return null;
-  }
-}
 
 /// เปิดหน้าต่างให้แอดมินตรวจสอบยอด/บัญชีเจ้าของ แนบสลิปการโอน และยืนยันจ่ายเงิน
 Future<void> showAdminPayoutDialog(
@@ -216,7 +183,7 @@ class _AdminPayoutDialogState extends State<_AdminPayoutDialog> {
     }
   }
 
-  Widget _buildPayoutSlipPicker(ThemeData theme, ColorScheme scheme) => Column(
+  Widget _buildPayoutSlipPicker(ThemeData theme) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       Text(
@@ -224,71 +191,25 @@ class _AdminPayoutDialogState extends State<_AdminPayoutDialog> {
         style: theme.textTheme.labelMedium,
       ),
       const SizedBox(height: 8),
-      Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: scheme.surfaceContainerLow,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: scheme.outline),
-        ),
-        child: slipBytes != null
-            ? Column(
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.memory(
-                      slipBytes!,
-                      height: 150,
-                      fit: BoxFit.contain,
-                      errorBuilder: (_, _, _) => const Text('ไม่สามารถเปิดภาพได้'),
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(slipName, style: theme.textTheme.labelSmall),
-                ],
-              )
-            : Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: Column(
-                  children: [
-                    Icon(
-                      Icons.receipt_long_outlined,
-                      size: 28,
-                      color: scheme.onSurface.withValues(alpha: 0.4),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'กรุณาแนบภาพสลิปการโอนก่อนยืนยัน',
-                      style: theme.textTheme.bodySmall,
-                    ),
-                  ],
-                ),
-              ),
-      ),
-      const SizedBox(height: 8),
-      Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: [
-          OutlinedButton.icon(
-            key: const ValueKey('payout-pick-slip-btn'),
-            onPressed: busy ? null : _chooseSlip,
-            icon: const Icon(Icons.image_outlined, size: 18),
-            label: Text(busy ? 'กำลังอ่านภาพ...' : 'เลือกภาพสลิป'),
-          ),
-          if (slipBytes != null)
-            TextButton.icon(
-              key: const ValueKey('payout-clear-slip-btn'),
-              onPressed: busy
-                  ? null
-                  : () => setState(() {
-                      slipBytes = null;
-                      slipName = '';
-                    }),
-              icon: const Icon(Icons.delete_outline, size: 18),
-              label: const Text('ลบภาพ'),
-            ),
-        ],
+      ImagePickerBox(
+        busy: busy,
+        bytes: slipBytes,
+        fileName: slipName,
+        emptyIcon: Icons.receipt_long_outlined,
+        emptyIconSize: 28,
+        previewHeight: 150,
+        boxPadding: const EdgeInsets.all(12),
+        emptyText: 'กรุณาแนบภาพสลิปการโอนก่อนยืนยัน',
+        pickLabel: 'เลือกภาพสลิป',
+        pickKey: const ValueKey('payout-pick-slip-btn'),
+        clearKey: const ValueKey('payout-clear-slip-btn'),
+        onPick: _chooseSlip,
+        onClear: slipBytes == null
+            ? null
+            : () => setState(() {
+                slipBytes = null;
+                slipName = '';
+              }),
       ),
     ],
   );
@@ -324,16 +245,11 @@ class _AdminPayoutDialogState extends State<_AdminPayoutDialog> {
                   if (owner.bankInfo.trim().isNotEmpty)
                     IconButton(
                       tooltip: 'คัดลอกบัญชีรับเงิน',
-                      onPressed: () {
-                        Clipboard.setData(
-                          ClipboardData(text: owner.bankInfo.trim()),
-                        );
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text('คัดลอกบัญชี ${owner.bankInfo.trim()} แล้ว'),
-                          ),
-                        );
-                      },
+                      onPressed: () => copyToClipboard(
+                        context,
+                        owner.bankInfo.trim(),
+                        'คัดลอกบัญชี ${owner.bankInfo.trim()} แล้ว',
+                      ),
                       icon: const Icon(Icons.copy_outlined, size: 16),
                     ),
                 ],
@@ -353,7 +269,7 @@ class _AdminPayoutDialogState extends State<_AdminPayoutDialog> {
                 style: theme.textTheme.bodySmall,
               ),
               const SizedBox(height: 14),
-              _buildPayoutSlipPicker(theme, scheme),
+              _buildPayoutSlipPicker(theme),
               const SizedBox(height: 12),
               TextField(
                 key: const ValueKey('payout-note-field'),
@@ -420,22 +336,39 @@ class _BookingPageState extends State<BookingPage> {
     super.dispose();
   }
 
-  Future<void> reasonAction(
-    BuildContext context,
-    String title,
-    Future<void> Function(String) action,
-  ) async {
-    final reason = await askReason(context, title);
-    if (reason != null && context.mounted) {
-      perform(context, () => action(reason));
-    }
-  }
+  Map<String, String>? get _authHeaders => widget.store.api.authHeaders;
 
-  Map<String, String>? get _authHeaders {
-    final token = widget.store.api.token;
-    return token == null || token.isEmpty
-        ? null
-        : {'Authorization': 'Bearer $token'};
+  Widget _emptyScaffold(String message, {bool titled = true}) => Scaffold(
+    appBar: AppBar(title: titled ? const Text('รายละเอียดการจอง') : null),
+    body: PageBody(children: [empty(message)]),
+  );
+
+  Widget _deadlineBanner({
+    required DateTime deadline,
+    required String prefix,
+    required String expiredText,
+    required BadgeTone tone,
+    required IconData icon,
+    required bool showHours,
+  }) {
+    final diff = deadline.difference(store.clock());
+    final remaining = diff.isNegative
+        ? expiredText
+        : showHours && diff.inHours > 0
+        ? 'เหลือเวลาอีก ${diff.inHours} ชั่วโมง'
+        : diff.inMinutes > 0
+        ? 'เหลือเวลาอีก ${diff.inMinutes} นาที'
+        : 'เหลือเวลาไม่ถึง 1 นาที';
+    return NoticeBanner(
+      icon: icon,
+      iconSize: 16,
+      tone: tone,
+      bgAlpha: 0.1,
+      radius: 6,
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      message: '$prefix ${dateTimeLabel(deadline)} ($remaining)',
+    );
   }
 
   void _openSlipZoomDialog(BuildContext context, PaymentSlip slip) {
@@ -536,27 +469,16 @@ class _BookingPageState extends State<BookingPage> {
       final b = widget.store.maybeBooking(widget.bookingId);
       final u = widget.store.currentUser;
       if (b == null || u == null || !u.active) {
-        return Scaffold(
-          appBar: AppBar(title: const Text('รายละเอียดการจอง')),
-          body: PageBody(children: [empty('ไม่พบการจอง')]),
-        );
+        return _emptyScaffold('ไม่พบการจอง');
       }
       final allowed =
           u.role == UserRole.admin ||
           (u.role == UserRole.owner ? b.ownerId == u.id : b.renterId == u.id);
-      if (!allowed) {
-        return Scaffold(
-          appBar: AppBar(),
-          body: PageBody(children: [empty('ไม่มีสิทธิ์ดูรายการนี้')]),
-        );
-      }
+      if (!allowed) return _emptyScaffold('ไม่มีสิทธิ์ดูรายการนี้', titled: false);
       final renter = widget.store.maybeUser(b.renterId);
       final owner = widget.store.maybeUser(b.ownerId);
       if (renter == null || owner == null) {
-        return Scaffold(
-          appBar: AppBar(title: const Text('รายละเอียดการจอง')),
-          body: PageBody(children: [empty('ไม่พบข้อมูลผู้เกี่ยวข้อง')]),
-        );
+        return _emptyScaffold('ไม่พบข้อมูลผู้เกี่ยวข้อง');
       }
       final theme = Theme.of(context);
       final booking = widget.bookingController ?? BookingController(widget.store),
@@ -651,24 +573,19 @@ class _BookingPageState extends State<BookingPage> {
                     children: [
                       OutlinedButton.icon(
                         key: const ValueKey('copy-booking-id-btn'),
-                        onPressed: () async {
-                          await Clipboard.setData(ClipboardData(text: b.id));
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('คัดลอกรหัสการจอง ${b.id} แล้ว'),
-                              ),
-                            );
-                          }
-                        },
+                        onPressed: () => copyToClipboard(
+                          context,
+                          b.id,
+                          'คัดลอกรหัสการจอง ${b.id} แล้ว',
+                        ),
                         icon: const Icon(Icons.copy_outlined, size: 16),
                         label: const Text('คัดลอกรหัสจอง'),
                       ),
                       FilledButton.tonalIcon(
                         key: const ValueKey('copy-booking-evidence-btn'),
-                        onPressed: () async {
-                          final summary =
-                              'หลักฐานการจอง rentSPACE\n'
+                        onPressed: () => copyToClipboard(
+                          context,
+                          'หลักฐานการจอง rentSPACE\n'
                               'รหัสการจอง: ${b.id}\n'
                               'สถานที่: ${b.spaceName}\n'
                               'ช่วงเวลา: ${bookingWhen(b)}\n'
@@ -677,18 +594,9 @@ class _BookingPageState extends State<BookingPage> {
                               'ผู้เช่า: ${renter.name} (${renter.phoneLabel})\n'
                               'เจ้าของพื้นที่: ${owner.name} (${owner.phoneLabel})\n'
                               'สถานะ: ${b.status.label}\n'
-                              'ยอดชำระ: ${bahtLabel(b.rentAmount)}';
-                          await Clipboard.setData(ClipboardData(text: summary));
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'คัดลอกหลักฐานการจองพร้อมส่งต่อแล้ว',
-                                ),
-                              ),
-                            );
-                          }
-                        },
+                              'ยอดชำระ: ${bahtLabel(b.rentAmount)}',
+                          'คัดลอกหลักฐานการจองพร้อมส่งต่อแล้ว',
+                        ),
                         icon: const Icon(Icons.receipt_long_outlined, size: 16),
                         label: const Text('คัดลอกใบหลักฐานการจอง'),
                       ),
@@ -709,108 +617,25 @@ class _BookingPageState extends State<BookingPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     if (b.status == BookingStatus.paymentDue &&
-                        b.paymentDeadline != null) ...[
-                      Builder(
-                        builder: (context) {
-                          final diff = b.paymentDeadline!.difference(
-                            store.clock(),
-                          );
-                          final remaining = diff.isNegative
-                              ? 'หมดเวลาชำระแล้ว'
-                              : (diff.inMinutes > 0
-                                    ? 'เหลือเวลาอีก ${diff.inMinutes} นาที'
-                                    : 'เหลือเวลาไม่ถึง 1 นาที');
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 10),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: toneColor(
-                                context,
-                                BadgeTone.warning,
-                              ).withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.timer_outlined,
-                                  size: 16,
-                                  color: toneColor(context, BadgeTone.warning),
-                                ),
-                                const SizedBox(width: 6),
-                                Expanded(
-                                  child: Text(
-                                    'กรุณาชำระภายใน ${dateTimeLabel(b.paymentDeadline!)} ($remaining)',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                      color: toneColor(
-                                        context,
-                                        BadgeTone.warning,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
+                        b.paymentDeadline != null)
+                      _deadlineBanner(
+                        deadline: b.paymentDeadline!,
+                        prefix: 'กรุณาชำระภายใน',
+                        expiredText: 'หมดเวลาชำระแล้ว',
+                        tone: BadgeTone.warning,
+                        icon: Icons.timer_outlined,
+                        showHours: false,
                       ),
-                    ],
                     if (b.status == BookingStatus.slipRejected &&
-                        b.effectiveSlipResubmitDeadline != null) ...[
-                      Builder(
-                        builder: (context) {
-                          final diff = b.effectiveSlipResubmitDeadline!
-                              .difference(store.clock());
-                          final remaining = diff.isNegative
-                              ? 'หมดเวลาส่งสลิปแล้ว'
-                              : (diff.inHours > 0
-                                    ? 'เหลือเวลาอีก ${diff.inHours} ชั่วโมง'
-                                    : 'เหลือเวลาอีก ${diff.inMinutes} นาที');
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 10),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: toneColor(
-                                context,
-                                BadgeTone.danger,
-                              ).withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.error_outline,
-                                  size: 16,
-                                  color: toneColor(context, BadgeTone.danger),
-                                ),
-                                const SizedBox(width: 6),
-                                Expanded(
-                                  child: Text(
-                                    'ส่งสลิปใหม่ภายใน ${dateTimeLabel(b.effectiveSlipResubmitDeadline!)} ($remaining)',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                      color: toneColor(
-                                        context,
-                                        BadgeTone.danger,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
+                        b.effectiveSlipResubmitDeadline != null)
+                      _deadlineBanner(
+                        deadline: b.effectiveSlipResubmitDeadline!,
+                        prefix: 'ส่งสลิปใหม่ภายใน',
+                        expiredText: 'หมดเวลาส่งสลิปแล้ว',
+                        tone: BadgeTone.danger,
+                        icon: Icons.error_outline,
+                        showHours: true,
                       ),
-                    ],
                     Row(
                       children: [
                         Expanded(
@@ -821,18 +646,11 @@ class _BookingPageState extends State<BookingPage> {
                         ),
                         TextButton.icon(
                           key: const ValueKey('copy-account-btn'),
-                          onPressed: () async {
-                            Clipboard.setData(
-                              const ClipboardData(text: '000-0-00000-0'),
-                            );
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'คัดลอกเลขบัญชี 000-0-00000-0 แล้ว',
-                                ),
-                              ),
-                            );
-                          },
+                          onPressed: () => copyToClipboard(
+                            context,
+                            '000-0-00000-0',
+                            'คัดลอกเลขบัญชี 000-0-00000-0 แล้ว',
+                          ),
                           icon: const Icon(Icons.copy_outlined, size: 15),
                           label: const Text('คัดลอก'),
                         ),
@@ -938,27 +756,12 @@ class _BookingPageState extends State<BookingPage> {
                       BookingInfoRow(
                         'บัญชีรับเงิน',
                         owner.bankInfo,
-                        trailing: InkWell(
-                          onTap: () async {
-                            Clipboard.setData(
-                              ClipboardData(text: owner.bankInfo),
-                            );
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  'คัดลอกเลขบัญชี ${owner.bankInfo} แล้ว',
-                                ),
-                              ),
-                            );
-                          },
-                          child: Padding(
-                            padding: const EdgeInsets.only(left: 6),
-                            child: Icon(
-                              Icons.copy_outlined,
-                              size: 15,
-                              color: theme.colorScheme.primary,
-                            ),
-                          ),
+                        trailing: CopyIconButton(
+                          text: owner.bankInfo,
+                          message: 'คัดลอกเลขบัญชี ${owner.bankInfo} แล้ว',
+                          size: 15,
+                          padding: const EdgeInsets.only(left: 6),
+                          duration: null,
                         ),
                       ),
                   ],
@@ -1007,7 +810,7 @@ class _BookingPageState extends State<BookingPage> {
                       BookingStatus.slipRejected,
                     ].contains(b.status))
                   OutlinedButton(
-                    onPressed: () => reasonAction(
+                    onPressed: () => performWithReason(
                       context,
                       'ยกเลิกคำขอจอง',
                       (r) => booking.cancelAsync(b.id, r),
@@ -1024,7 +827,7 @@ class _BookingPageState extends State<BookingPage> {
                     child: const Text('อนุมัติคำขอ'),
                   ),
                   OutlinedButton(
-                    onPressed: () => reasonAction(
+                    onPressed: () => performWithReason(
                       context,
                       'เหตุผลปฏิเสธคำขอ',
                       (r) => booking.ownerReviewAsync(b.id, false, r),
@@ -1054,7 +857,7 @@ class _BookingPageState extends State<BookingPage> {
                     child: const Text('ตรวจแล้ว ยืนยันการจอง'),
                   ),
                   OutlinedButton(
-                    onPressed: () => reasonAction(
+                    onPressed: () => performWithReason(
                       context,
                       'เหตุผลที่สลิปไม่ผ่าน',
                       (r) => payment.reviewAsync(b.id, false, r),
@@ -1177,7 +980,7 @@ class _BookingPageState extends State<BookingPage> {
               Align(
                 alignment: Alignment.centerLeft,
                 child: TextButton(
-                  onPressed: () => reasonAction(
+                  onPressed: () => performWithReason(
                     context,
                     'ยกเลิกการจอง',
                     (r) => booking.cancelAsync(b.id, r),
@@ -1189,7 +992,7 @@ class _BookingPageState extends State<BookingPage> {
               Align(
                 alignment: Alignment.centerLeft,
                 child: TextButton(
-                  onPressed: () => reasonAction(
+                  onPressed: () => performWithReason(
                     context,
                     'แจ้งปัญหา / ขอให้ Admin ช่วยเหลือ',
                     (r) => (widget.spaceController ?? SpaceController(store))
@@ -1249,72 +1052,29 @@ class _SlipPageState extends State<SlipPage> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    return Scaffold(
-      appBar: AppBar(title: const Text('แนบสลิป')),
-      body: PageBody(
-        children: [
-          heading(
-            widget.booking.spaceName,
-            'ยอดชำระ ${bahtLabel(widget.booking.rentAmount)}',
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('แนบสลิป')),
+    body: PageBody(
+      children: [
+        heading(
+          widget.booking.spaceName,
+          'ยอดชำระ ${bahtLabel(widget.booking.rentAmount)}',
+        ),
+        SurfaceCard(
+          title: 'อัปโหลดสลิป',
+          subtitle: 'JPG / PNG ไม่เกิน 5 MB',
+          child: ImagePickerBox(
+            busy: busy,
+            bytes: bytes,
+            fileName: filename,
+            previewHeight: 260,
+            boxPadding: const EdgeInsets.all(20),
+            emptyText:
+                'เลือกภาพ JPG / PNG ไม่เกิน 5 MB\nที่แสดงยอด วันเวลา และเลขอ้างอิง',
+            pickLabel: 'เลือกภาพสลิป',
+            onPick: choose,
           ),
-          SurfaceCard(
-            title: 'อัปโหลดสลิป',
-            subtitle: 'JPG / PNG ไม่เกิน 5 MB',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: scheme.surfaceContainerLow,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: scheme.outline),
-                  ),
-                  child: Column(
-                    children: [
-                      if (bytes != null)
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: Image.memory(
-                            bytes!,
-                            height: 260,
-                            fit: BoxFit.contain,
-                            errorBuilder: (_, _, _) => const Text('ไม่สามารถเปิดภาพได้'),
-                          ),
-                        )
-                      else ...[
-                        Icon(
-                          Icons.image_outlined,
-                          size: 34,
-                          color: scheme.onSurface.withValues(alpha: 0.35),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'เลือกภาพ JPG / PNG ไม่เกิน 5 MB\n'
-                          'ที่แสดงยอด วันเวลา และเลขอ้างอิง',
-                          textAlign: TextAlign.center,
-                          style: theme.textTheme.bodySmall,
-                        ),
-                      ],
-                      if (filename.isNotEmpty) ...[
-                        const SizedBox(height: 10),
-                        Text(filename, style: theme.textTheme.labelSmall),
-                      ],
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  onPressed: busy ? null : choose,
-                  icon: const Icon(Icons.image_outlined, size: 18),
-                  label: Text(busy ? 'กำลังอ่านภาพ...' : 'เลือกภาพสลิป'),
-                ),
-              ],
-            ),
-          ),
+        ),
           SurfaceCard(
             title: 'หมายเหตุ',
             child: Column(
@@ -1355,7 +1115,6 @@ class _SlipPageState extends State<SlipPage> {
         ],
       ),
     );
-  }
 }
 
 class _ReviewFormCard extends StatefulWidget {

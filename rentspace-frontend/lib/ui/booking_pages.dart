@@ -112,6 +112,38 @@ class _ReservePageState extends State<ReservePage> {
     });
   }
 
+  List<Widget> _stepperControls({
+    required String prefix,
+    required String label,
+    required String decTip,
+    required String incTip,
+    required VoidCallback? onDec,
+    required VoidCallback? onInc,
+    EdgeInsetsGeometry labelPadding = EdgeInsets.zero,
+  }) => [
+    IconButton.outlined(
+      key: ValueKey('$prefix-decrement'),
+      tooltip: decTip,
+      onPressed: onDec,
+      icon: const Icon(Icons.remove, size: 16),
+    ),
+    Padding(
+      padding: labelPadding,
+      child: Text(
+        label,
+        style: Theme.of(
+          context,
+        ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+      ),
+    ),
+    IconButton.outlined(
+      key: ValueKey('$prefix-increment'),
+      tooltip: incTip,
+      onPressed: onInc,
+      icon: const Icon(Icons.add, size: 16),
+    ),
+  ];
+
   @override
   Widget build(BuildContext context) {
     final s = widget.space;
@@ -261,27 +293,15 @@ class _ReservePageState extends State<ReservePage> {
                           selected: days == preset,
                           onSelected: (_) => setState(() => days = preset),
                         ),
-                      IconButton.outlined(
-                        key: const ValueKey('days-decrement'),
-                        tooltip: 'ลดจำนวนวัน',
-                        onPressed: days > 2
-                            ? () => setState(() => days--)
-                            : null,
-                        icon: const Icon(Icons.remove, size: 16),
-                      ),
-                      Text(
-                        '$days วัน',
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      IconButton.outlined(
-                        key: const ValueKey('days-increment'),
-                        tooltip: 'เพิ่มจำนวนวัน',
-                        onPressed: days < BookingController.maxBookingDays
+                      ..._stepperControls(
+                        prefix: 'days',
+                        label: '$days วัน',
+                        decTip: 'ลดจำนวนวัน',
+                        incTip: 'เพิ่มจำนวนวัน',
+                        onDec: days > 2 ? () => setState(() => days--) : null,
+                        onInc: days < BookingController.maxBookingDays
                             ? () => setState(() => days++)
                             : null,
-                        icon: const Icon(Icons.add, size: 16),
                       ),
                       if (dayHours.open)
                         TextButton.icon(
@@ -381,35 +401,21 @@ class _ReservePageState extends State<ReservePage> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: statusColor.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        available
-                            ? Icons.check_circle_outline
-                            : Icons.error_outline,
-                        size: 16,
-                        color: statusColor,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          durationError ??
-                              (available
-                                  ? (days > 1
-                                        ? 'ช่วงเวลานี้ว่างครบทั้ง $days วัน'
-                                        : 'ช่วงเวลานี้ว่าง')
-                                  : 'ช่วงเวลานี้ไม่ว่าง / นอกเวลาเปิด'),
-                          style: TextStyle(fontSize: 12, color: statusColor),
-                        ),
-                      ),
-                    ],
-                  ),
+                NoticeBanner(
+                  icon: available
+                      ? Icons.check_circle_outline
+                      : Icons.error_outline,
+                  iconSize: 16,
+                  tone: available ? BadgeTone.success : BadgeTone.danger,
+                  bgAlpha: 0.08,
+                  textStyle: TextStyle(fontSize: 12, color: statusColor),
+                  message:
+                      durationError ??
+                      (available
+                          ? (days > 1
+                                ? 'ช่วงเวลานี้ว่างครบทั้ง $days วัน'
+                                : 'ช่วงเวลานี้ว่าง')
+                          : 'ช่วงเวลานี้ไม่ว่าง / นอกเวลาเปิด'),
                 ),
                 const Divider(height: 24),
                 Row(
@@ -422,30 +428,18 @@ class _ReservePageState extends State<ReservePage> {
                         ),
                       ),
                     ),
-                    IconButton.outlined(
-                      key: const ValueKey('attendees-decrement'),
-                      tooltip: 'ลดจำนวนคน',
-                      onPressed: attendees > 1
+                    ..._stepperControls(
+                      prefix: 'attendees',
+                      label: '$attendees ท่าน',
+                      decTip: 'ลดจำนวนคน',
+                      incTip: 'เพิ่มจำนวนคน',
+                      labelPadding: const EdgeInsets.symmetric(horizontal: 10),
+                      onDec: attendees > 1
                           ? () => setState(() => attendees--)
                           : null,
-                      icon: const Icon(Icons.remove, size: 16),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      child: Text(
-                        '$attendees ท่าน',
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                    IconButton.outlined(
-                      key: const ValueKey('attendees-increment'),
-                      tooltip: 'เพิ่มจำนวนคน',
-                      onPressed: attendees < s.capacity
+                      onInc: attendees < s.capacity
                           ? () => setState(() => attendees++)
                           : null,
-                      icon: const Icon(Icons.add, size: 16),
                     ),
                   ],
                 ),
@@ -591,16 +585,12 @@ class _ReservePageState extends State<ReservePage> {
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton(
-              onPressed: () async {
-                final detail = await askReason(context, 'รายงานปัญหาพื้นที่');
-                if (detail != null && context.mounted) {
-                  perform(
-                    context,
-                    () => spaceCtrl.reportAsync(s.name, detail),
-                    'ส่งรายงานแล้ว',
-                  );
-                }
-              },
+              onPressed: () => performWithReason(
+                context,
+                'รายงานปัญหาพื้นที่',
+                (detail) => spaceCtrl.reportAsync(s.name, detail),
+                'ส่งรายงานแล้ว',
+              ),
               child: const Text('รายงานปัญหาพื้นที่'),
             ),
           ),
@@ -698,11 +688,7 @@ class _BookingConfirmationPageState extends State<BookingConfirmationPage> {
     if (!_acceptedTerms || _submitting) return;
     final renter = widget.store.currentUser;
     if (renter == null || renter.phone.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('กรุณาระบุเบอร์โทรศัพท์สำหรับติดต่อก่อนยืนยันการจอง'),
-        ),
-      );
+      showToast(context, 'กรุณาระบุเบอร์โทรศัพท์สำหรับติดต่อก่อนยืนยันการจอง');
       return;
     }
 
@@ -728,9 +714,7 @@ class _BookingConfirmationPageState extends State<BookingConfirmationPage> {
     setState(() => _submitting = false);
 
     if (success && created != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('ส่งคำขอจอง ${created!.id} สำเร็จแล้ว')),
-      );
+      showToast(context, 'ส่งคำขอจอง ${created!.id} สำเร็จแล้ว');
       Navigator.pushAndRemoveUntil(
         context,
         MaterialPageRoute(
@@ -839,29 +823,14 @@ class _BookingConfirmationPageState extends State<BookingConfirmationPage> {
             controlAffinity: ListTileControlAffinity.leading,
             contentPadding: EdgeInsets.zero,
           ),
-          Container(
+          NoticeBanner(
+            icon: Icons.info_outline,
+            iconSize: 20,
+            radius: 10,
             padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerLow,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: theme.colorScheme.outline),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.info_outline,
-                  size: 20,
-                  color: theme.colorScheme.primary,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'ยังไม่ต้องชำระเงินทันที! เจ้าของพื้นที่จะตอบรับคำขอภายใน 24 ชม. เมื่อได้รับการอนุมัติแล้วจึงจะเข้าสู่ขั้นตอนแนบสลิปชำระเงิน',
-                    style: theme.textTheme.bodySmall,
-                  ),
-                ),
-              ],
-            ),
+            textStyle: theme.textTheme.bodySmall,
+            message:
+                'ยังไม่ต้องชำระเงินทันที! เจ้าของพื้นที่จะตอบรับคำขอภายใน 24 ชม. เมื่อได้รับการอนุมัติแล้วจึงจะเข้าสู่ขั้นตอนแนบสลิปชำระเงิน',
           ),
           const SizedBox(height: 8),
           FilledButton(
@@ -1172,40 +1141,18 @@ class _PreBookingRenterCard extends StatelessWidget {
           BookingInfoRow('อีเมล', renter?.email ?? 'ไม่ระบุ'),
           if (!hasPhone) ...[
             const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: toneColor(
-                  context,
-                  BadgeTone.warning,
-                ).withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: toneColor(
-                    context,
-                    BadgeTone.warning,
-                  ).withValues(alpha: 0.5),
-                ),
+            NoticeBanner(
+              icon: Icons.warning_amber_rounded,
+              tone: BadgeTone.warning,
+              borderAlpha: 0.5,
+              textStyle: theme.textTheme.bodySmall?.copyWith(
+                color: toneColor(context, BadgeTone.warning),
+                fontWeight: FontWeight.w600,
               ),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.warning_amber_rounded,
-                    size: 18,
-                    color: toneColor(context, BadgeTone.warning),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'กรุณาระบุเบอร์โทรศัพท์สำหรับให้เจ้าของพื้นที่ติดต่อ',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: toneColor(context, BadgeTone.warning),
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                  TextButton(onPressed: onEdit, child: const Text('ระบุเบอร์')),
-                ],
+              message: 'กรุณาระบุเบอร์โทรศัพท์สำหรับให้เจ้าของพื้นที่ติดต่อ',
+              trailing: TextButton(
+                onPressed: onEdit,
+                child: const Text('ระบุเบอร์'),
               ),
             ),
           ],

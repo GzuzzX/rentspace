@@ -118,6 +118,23 @@ void applySnapshot(AppStore store, Map<String, dynamic> data) {
     comment: r['comment'] ?? '',
     createdAt: _time(r['created_at'])!,
   );
+  PaymentSlip buildSlip(
+    String name,
+    String rawData,
+    String rawUrl,
+    DateTime at,
+    String note, [
+    String rejected = '',
+  ]) => PaymentSlip(
+    name: name,
+    bytes: rawData.isEmpty
+        ? Uint8List(0)
+        : (decodeImageSafely(rawData) ?? Uint8List(0)),
+    submittedAt: at,
+    note: note,
+    imageUrl: _resolveMediaUrl(store, rawUrl),
+  )..rejectionReason = rejected;
+
   final bookings = (data['bookings'] as List).map((b) {
     final booking = Booking(
       id: _str(b['id']),
@@ -145,41 +162,31 @@ void applySnapshot(AppStore store, Map<String, dynamic> data) {
     booking.paidOutAt = _time(b['paid_out_at']);
     final payoutName = _str(b['payout_slip_name']);
     final payoutData = b['payout_slip_data'] as String? ?? '';
-    final payoutUrl = _resolveMediaUrl(
-      store,
-      b['payout_slip_url'] as String? ?? '',
-    );
+    final payoutRawUrl = b['payout_slip_url'] as String? ?? '';
     final payoutNote = b['payout_note'] as String? ?? '';
     if (booking.paidOutAt != null &&
-        (payoutName.isNotEmpty ||
-            payoutData.isNotEmpty ||
-            payoutUrl.isNotEmpty ||
-            payoutNote.isNotEmpty)) {
-      booking.payoutSlip = PaymentSlip(
-        name: payoutName.isEmpty ? 'payout_slip.jpg' : payoutName,
-        bytes: payoutData.isNotEmpty
-            ? (decodeImageSafely(payoutData) ?? Uint8List(0))
-            : Uint8List(0),
-        submittedAt: booking.paidOutAt!,
-        note: payoutNote,
-        imageUrl: payoutUrl,
+        [payoutName, payoutData, payoutRawUrl.trim(), payoutNote]
+            .any((s) => s.isNotEmpty)) {
+      booking.payoutSlip = buildSlip(
+        payoutName.isEmpty ? 'payout_slip.jpg' : payoutName,
+        payoutData,
+        payoutRawUrl,
+        booking.paidOutAt!,
+        payoutNote,
       );
     }
     booking.reasonKind = _parseReasonKind(b['reason_kind'], booking.status);
     for (final s in data['slips']) {
       if (_str(s['booking_id']) != booking.id) continue;
-      final imageData = s['image_data'] as String? ?? '';
-      final imageUrl = _resolveMediaUrl(store, s['image_url'] as String? ?? '');
       booking.slips.add(
-        PaymentSlip(
-          name: _str(s['file_name']),
-          bytes: imageData.isNotEmpty
-              ? (decodeImageSafely(imageData) ?? Uint8List(0))
-              : Uint8List(0),
-          submittedAt: _time(s['submitted_at'])!,
-          note: s['note'] ?? '',
-          imageUrl: imageUrl,
-        )..rejectionReason = s['rejection_reason'] ?? '',
+        buildSlip(
+          _str(s['file_name']),
+          s['image_data'] as String? ?? '',
+          s['image_url'] as String? ?? '',
+          _time(s['submitted_at'])!,
+          s['note'] ?? '',
+          s['rejection_reason'] ?? '',
+        ),
       );
     }
     for (final r in data['reviews']) {

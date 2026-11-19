@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../controllers/auth_controller.dart';
 import '../controllers/booking_controller.dart';
@@ -13,8 +12,16 @@ import 'booking_pages.dart';
 import 'common.dart';
 import 'space_form.dart';
 
+part 'home_page_widgets.dart';
+
 String _initial(String name) =>
     name.trim().isEmpty ? '?' : name.trim().substring(0, 1);
+
+const _historyStatuses = {
+  BookingStatus.completed,
+  BookingStatus.canceled,
+  BookingStatus.ownerRejected,
+};
 
 class HomePage extends StatefulWidget {
   const HomePage({
@@ -82,6 +89,16 @@ class _HomePageState extends State<HomePage> {
 
   void open(Widget page) =>
       Navigator.push(context, MaterialPageRoute(builder: (_) => page));
+  void _openReserve(Space s) => open(
+    ReservePage(
+      store: store,
+      space: s,
+      bookingController: widget.bookingController,
+      paymentController: widget.paymentController,
+      spaceController: widget.spaceController,
+      authController: widget.authController,
+    ),
+  );
   void bookingDetail(Booking b) => open(
     BookingPage(
       store: store,
@@ -99,67 +116,212 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  void _resetSpaceFilters() {
+    category = 'ทั้งหมด';
+    sort = SpaceSort.recommended;
+    maxPriceFilter = null;
+    minCapacityFilter = null;
+  }
+
+  Widget _clearableSearchField({
+    Key? key,
+    required TextEditingController controller,
+    required String value,
+    required String hint,
+    required ValueChanged<String> onChanged,
+    double iconSize = 20,
+  }) => TextField(
+    key: key,
+    controller: controller,
+    onChanged: onChanged,
+    decoration: InputDecoration(
+      prefixIcon: Icon(Icons.search, size: iconSize),
+      hintText: hint,
+      suffixIcon: value.isEmpty
+          ? null
+          : IconButton(
+              tooltip: 'ล้างคำค้นหา',
+              onPressed: () {
+                controller.clear();
+                onChanged('');
+              },
+              icon: const Icon(Icons.close, size: 18),
+            ),
+    ),
+  );
+
+  Widget _chipSection(BuildContext ctx, String title, List<Widget> chips) =>
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SizedBox(height: 14),
+          Text(title, style: Theme.of(ctx).textTheme.titleSmall),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 8, children: chips),
+        ],
+      );
+
+  Widget _bookingAmountHeader(
+    Booking b, {
+    required String amount,
+    required String subtitle,
+  }) {
+    final theme = Theme.of(context);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                b.spaceName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.titleSmall,
+              ),
+              const SizedBox(height: 4),
+              StatusBadge(b.status.label, tone: bookingTone(b.status)),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              amount,
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            Text(subtitle, style: theme.textTheme.labelSmall),
+          ],
+        ),
+      ],
+    );
+  }
+
+  void _openBookingStatusSheet({bool resetPendingPayout = false}) {
+    void pick(BookingStatus? next, BuildContext ctx) {
+      setState(() {
+        filter = next;
+        if (resetPendingPayout) pendingPayoutOnly = false;
+      });
+      Navigator.pop(ctx);
+    }
+
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'กรองตามสถานะการจอง',
+                style: Theme.of(ctx).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final s in <BookingStatus?>[
+                    null,
+                    ...BookingStatus.values,
+                  ])
+                    ChoiceChip(
+                      label: Text(s?.label ?? 'ทั้งหมด'),
+                      selected: filter == s,
+                      onSelected: (_) => pick(s, ctx),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _spaceApprovalButtons(Space s) => [
+    FilledButton(
+      onPressed: () =>
+          perform(context, () => _spaceCtrl.reviewAsync(s.id, true, '')),
+      child: const Text('อนุมัติประกาศ'),
+    ),
+    OutlinedButton(
+      onPressed: () => performWithReason(
+        context,
+        'เหตุผลไม่อนุมัติ',
+        (r) => _spaceCtrl.reviewAsync(s.id, false, r),
+      ),
+      child: const Text('ปฏิเสธประกาศ'),
+    ),
+  ];
+
   @override
   Widget build(BuildContext context) {
     if (store.currentUser == null) return const SizedBox.shrink();
     final role = user.role;
-    final labels = switch (role) {
-      UserRole.renter => ['ค้นหา', 'การจอง', 'รายการโปรด', 'โปรไฟล์'],
-      UserRole.owner => ['ภาพรวม', 'พื้นที่', 'การจอง', 'รายรับ', 'โปรไฟล์'],
-      UserRole.admin => ['ภาพรวม', 'ตรวจสอบ', 'การเงิน', 'ผู้ใช้', 'โปรไฟล์'],
-    };
-    final icons = switch (role) {
-      UserRole.renter => [
-        Icons.search,
-        Icons.event_note,
-        Icons.favorite_border,
-        Icons.person_outline,
-      ],
-      UserRole.owner => [
-        Icons.dashboard_outlined,
-        Icons.home_work_outlined,
-        Icons.event_available,
-        Icons.account_balance_wallet_outlined,
-        Icons.person_outline,
-      ],
-      UserRole.admin => [
-        Icons.dashboard_outlined,
-        Icons.rule_folder_outlined,
-        Icons.payments_outlined,
-        Icons.people_outline,
-        Icons.person_outline,
-      ],
-    };
-    final body = switch (role) {
-      UserRole.renter => switch (index) {
-        0 => browse(false),
-        1 => bookingList(),
-        2 => browse(true),
-        _ => ProfilePanel(
-          store: store,
-          authController: widget.authController,
-        ),
-      },
-      UserRole.owner => switch (index) {
-        0 => dashboard(),
-        1 => spaces(),
-        2 => ownerReservations(),
-        3 => payouts(),
-        _ => ProfilePanel(
-          store: store,
-          authController: widget.authController,
-        ),
-      },
-      UserRole.admin => switch (index) {
-        0 => dashboard(),
-        1 => moderation(),
-        2 => finance(),
-        3 => users(),
-        _ => ProfilePanel(
-          store: store,
-          authController: widget.authController,
-        ),
-      },
+    final profile = ProfilePanel(
+      store: store,
+      authController: widget.authController,
+    );
+    final (labels, icons, body) = switch (role) {
+      UserRole.renter => (
+        const ['ค้นหา', 'การจอง', 'รายการโปรด', 'โปรไฟล์'],
+        const [
+          Icons.search,
+          Icons.event_note,
+          Icons.favorite_border,
+          Icons.person_outline,
+        ],
+        switch (index) {
+          0 => browse(false),
+          1 => bookingList(),
+          2 => browse(true),
+          _ => profile,
+        },
+      ),
+      UserRole.owner => (
+        const ['ภาพรวม', 'พื้นที่', 'การจอง', 'รายรับ', 'โปรไฟล์'],
+        const [
+          Icons.dashboard_outlined,
+          Icons.home_work_outlined,
+          Icons.event_available,
+          Icons.account_balance_wallet_outlined,
+          Icons.person_outline,
+        ],
+        switch (index) {
+          0 => dashboard(),
+          1 => spaces(),
+          2 => ownerReservations(),
+          3 => payouts(),
+          _ => profile,
+        },
+      ),
+      UserRole.admin => (
+        const ['ภาพรวม', 'ตรวจสอบ', 'การเงิน', 'ผู้ใช้', 'โปรไฟล์'],
+        const [
+          Icons.dashboard_outlined,
+          Icons.rule_folder_outlined,
+          Icons.payments_outlined,
+          Icons.people_outline,
+          Icons.person_outline,
+        ],
+        switch (index) {
+          0 => dashboard(),
+          1 => moderation(),
+          2 => finance(),
+          3 => users(),
+          _ => profile,
+        },
+      ),
     };
     final badges = store.navBadges();
     return PopScope(
@@ -222,7 +384,6 @@ class _HomePageState extends State<HomePage> {
       isScrollControlled: true,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) {
-          final theme = Theme.of(ctx);
           void update(VoidCallback fn) {
             setState(fn);
             setSheetState(() {});
@@ -240,94 +401,60 @@ class _HomePageState extends State<HomePage> {
                       Expanded(
                         child: Text(
                           'ตัวกรองและเรียงลำดับ',
-                          style: theme.textTheme.titleMedium,
+                          style: Theme.of(ctx).textTheme.titleMedium,
                         ),
                       ),
                       TextButton(
-                        onPressed: () => update(() {
-                          category = 'ทั้งหมด';
-                          sort = SpaceSort.recommended;
-                          maxPriceFilter = null;
-                          minCapacityFilter = null;
-                        }),
+                        onPressed: () => update(_resetSpaceFilters),
                         child: const Text('ล้างค่าทั้งหมด'),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 12),
-                  Text('หมวดหมู่พื้นที่', style: theme.textTheme.titleSmall),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: categories
-                        .map(
-                          (c) => ChoiceChip(
-                            label: Text(c),
-                            selected: category == c,
-                            onSelected: (_) => update(() => category = c),
-                          ),
-                        )
-                        .toList(),
-                  ),
-                  const SizedBox(height: 14),
-                  Text('เรียงลำดับตาม', style: theme.textTheme.titleSmall),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final option in SpaceSort.values)
-                        ChoiceChip(
-                          key: ValueKey('sort-${option.name}'),
-                          label: Text(option.label),
-                          selected: sort == option,
-                          onSelected: (_) => update(() => sort = option),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  Text('งบประมาณต่อชั่วโมง', style: theme.textTheme.titleSmall),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final (label, priceCap) in [
-                        ('ทุกราคา', null),
-                        ('ไม่เกิน ฿300', 300),
-                        ('ไม่เกิน ฿600', 600),
-                        ('ไม่เกิน ฿1,000', 1000),
-                      ])
-                        ChoiceChip(
-                          label: Text(label),
-                          selected: maxPriceFilter == priceCap,
-                          onSelected: (_) =>
-                              update(() => maxPriceFilter = priceCap),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  Text('ความจุขั้นต่ำ', style: theme.textTheme.titleSmall),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final (label, cap) in [
-                        ('ทุกความจุ', null),
-                        ('4+ คน', 4),
-                        ('8+ คน', 8),
-                        ('12+ คน', 12),
-                      ])
-                        ChoiceChip(
-                          label: Text(label),
-                          selected: minCapacityFilter == cap,
-                          onSelected: (_) =>
-                              update(() => minCapacityFilter = cap),
-                        ),
-                    ],
-                  ),
+                  _chipSection(ctx, 'หมวดหมู่พื้นที่', [
+                    for (final c in categories)
+                      ChoiceChip(
+                        label: Text(c),
+                        selected: category == c,
+                        onSelected: (_) => update(() => category = c),
+                      ),
+                  ]),
+                  _chipSection(ctx, 'เรียงลำดับตาม', [
+                    for (final option in SpaceSort.values)
+                      ChoiceChip(
+                        key: ValueKey('sort-${option.name}'),
+                        label: Text(option.label),
+                        selected: sort == option,
+                        onSelected: (_) => update(() => sort = option),
+                      ),
+                  ]),
+                  _chipSection(ctx, 'งบประมาณต่อชั่วโมง', [
+                    for (final (label, priceCap) in const [
+                      ('ทุกราคา', null),
+                      ('ไม่เกิน ฿300', 300),
+                      ('ไม่เกิน ฿600', 600),
+                      ('ไม่เกิน ฿1,000', 1000),
+                    ])
+                      ChoiceChip(
+                        label: Text(label),
+                        selected: maxPriceFilter == priceCap,
+                        onSelected: (_) =>
+                            update(() => maxPriceFilter = priceCap),
+                      ),
+                  ]),
+                  _chipSection(ctx, 'ความจุขั้นต่ำ', [
+                    for (final (label, cap) in const [
+                      ('ทุกความจุ', null),
+                      ('4+ คน', 4),
+                      ('8+ คน', 8),
+                      ('12+ คน', 12),
+                    ])
+                      ChoiceChip(
+                        label: Text(label),
+                        selected: minCapacityFilter == cap,
+                        onSelected: (_) =>
+                            update(() => minCapacityFilter = cap),
+                      ),
+                  ]),
                   const SizedBox(height: 18),
                   FilledButton(
                     onPressed: () => Navigator.pop(ctx),
@@ -402,23 +529,11 @@ class _HomePageState extends State<HomePage> {
               Row(
                 children: [
                   Expanded(
-                    child: TextField(
+                    child: _clearableSearchField(
                       controller: searchController,
+                      value: query,
+                      hint: 'ค้นหาชื่อ / ที่อยู่ / สิ่งอำนวยความสะดวก',
                       onChanged: (v) => setState(() => query = v),
-                      decoration: InputDecoration(
-                        prefixIcon: const Icon(Icons.search, size: 20),
-                        hintText: 'ค้นหาชื่อ / ที่อยู่ / สิ่งอำนวยความสะดวก',
-                        suffixIcon: query.isEmpty
-                            ? null
-                            : IconButton(
-                                tooltip: 'ล้างคำค้นหา',
-                                onPressed: () async {
-                                  searchController.clear();
-                                  setState(() => query = '');
-                                },
-                                icon: const Icon(Icons.close, size: 18),
-                              ),
-                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -454,12 +569,7 @@ class _HomePageState extends State<HomePage> {
                         tone: BadgeTone.warning,
                       ),
                     TextButton(
-                      onPressed: () => setState(() {
-                        category = 'ทั้งหมด';
-                        sort = SpaceSort.recommended;
-                        maxPriceFilter = null;
-                        minCapacityFilter = null;
-                      }),
+                      onPressed: () => setState(_resetSpaceFilters),
                       child: const Text('ล้างตัวกรอง'),
                     ),
                   ],
@@ -490,16 +600,7 @@ class _HomePageState extends State<HomePage> {
         for (final s in list)
           SurfaceCard(
             padding: EdgeInsets.zero,
-            onTap: () => open(
-              ReservePage(
-                store: store,
-                space: s,
-                bookingController: widget.bookingController,
-                paymentController: widget.paymentController,
-                spaceController: widget.spaceController,
-                authController: widget.authController,
-              ),
-            ),
+            onTap: () => _openReserve(s),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -622,16 +723,7 @@ class _HomePageState extends State<HomePage> {
                       Align(
                         alignment: Alignment.centerLeft,
                         child: FilledButton(
-                          onPressed: () => open(
-                            ReservePage(
-                              store: store,
-                              space: s,
-                              bookingController: widget.bookingController,
-                              paymentController: widget.paymentController,
-                              spaceController: widget.spaceController,
-                              authController: widget.authController,
-                            ),
-                          ),
+                          onPressed: () => _openReserve(s),
                           child: const Text('ดูรายละเอียดและจอง'),
                         ),
                       ),
@@ -768,9 +860,7 @@ class _HomePageState extends State<HomePage> {
                       slip,
                       height: 240,
                       width: double.infinity,
-                      headers: store.api.token?.isNotEmpty == true
-                          ? {'Authorization': 'Bearer ${store.api.token}'}
-                          : null,
+                      headers: store.api.authHeaders,
                       fallback: Container(
                         height: 120,
                         color: Colors.grey.shade200,
@@ -803,21 +893,19 @@ class _HomePageState extends State<HomePage> {
             child: const Text('ปิด'),
           ),
           OutlinedButton(
-            onPressed: () async {
+            onPressed: () {
               Navigator.pop(ctx);
-              final r = await askReason(context, 'ระบุเหตุผลที่ปฏิเสธสลิป');
-              if (r != null && mounted) {
-                perform(
-                  context,
-                  () => _paymentCtrl.reviewAsync(b.id, false, r),
-                  'ปฏิเสธสลิปแล้ว',
-                );
-              }
+              performWithReason(
+                context,
+                'ระบุเหตุผลที่ปฏิเสธสลิป',
+                (r) => _paymentCtrl.reviewAsync(b.id, false, r),
+                'ปฏิเสธสลิปแล้ว',
+              );
             },
             child: const Text('ปฏิเสธสลิป'),
           ),
           FilledButton(
-            onPressed: () async {
+            onPressed: () {
               Navigator.pop(ctx);
               perform(
                 context,
@@ -832,17 +920,15 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  void _handleQuickPayout(Booking b) =>
-      showAdminPayoutDialog(
-        context,
-        store: store,
-        booking: b,
-        paymentController: widget.paymentController,
-      );
+  void _handleQuickPayout(Booking b) => showAdminPayoutDialog(
+    context,
+    store: store,
+    booking: b,
+    paymentController: widget.paymentController,
+  );
 
   Widget _adminFinanceCard(Booking b) {
     final theme = Theme.of(context);
-    final tone = bookingTone(b.status);
     final owner = store.user(b.ownerId);
     final renter = store.user(b.renterId);
 
@@ -852,42 +938,10 @@ class _HomePageState extends State<HomePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      b.spaceName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleSmall,
-                    ),
-                    const SizedBox(height: 4),
-                    StatusBadge(b.status.label, tone: tone),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    bahtLabel(b.rentAmount),
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      color: theme.colorScheme.primary,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  Text(
-                    'ค่าบริการ: ${bahtLabel(b.platformFee)}',
-                    style: theme.textTheme.labelSmall,
-                  ),
-                ],
-              ),
-            ],
+          _bookingAmountHeader(
+            b,
+            amount: bahtLabel(b.rentAmount),
+            subtitle: 'ค่าบริการ: ${bahtLabel(b.platformFee)}',
           ),
           const SizedBox(height: 8),
           Text(
@@ -906,25 +960,9 @@ class _HomePageState extends State<HomePage> {
               ),
               if (owner.bankInfo.isNotEmpty) ...[
                 const SizedBox(width: 4),
-                InkWell(
-                  borderRadius: BorderRadius.circular(4),
-                  onTap: () async {
-                    Clipboard.setData(ClipboardData(text: owner.bankInfo));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('คัดลอกบัญชี ${owner.bankInfo} แล้ว'),
-                        duration: const Duration(seconds: 2),
-                      ),
-                    );
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.all(2.0),
-                    child: Icon(
-                      Icons.copy_outlined,
-                      size: 13,
-                      color: theme.colorScheme.primary,
-                    ),
-                  ),
+                CopyIconButton(
+                  text: owner.bankInfo,
+                  message: 'คัดลอกบัญชี ${owner.bankInfo} แล้ว',
                 ),
               ],
             ],
@@ -972,7 +1010,6 @@ class _HomePageState extends State<HomePage> {
 
   Widget _ownerBookingCard(Booking b) {
     final theme = Theme.of(context);
-    final tone = bookingTone(b.status);
     final renter = store.user(b.renterId);
     final canComplete = !store.clock().isBefore(b.endsAt);
 
@@ -982,39 +1019,10 @@ class _HomePageState extends State<HomePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      b.spaceName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleSmall,
-                    ),
-                    const SizedBox(height: 4),
-                    StatusBadge(b.status.label, tone: tone),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    bahtLabel(b.ownerNet),
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      color: theme.colorScheme.primary,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  Text('สุทธิรับ', style: theme.textTheme.labelSmall),
-                ],
-              ),
-            ],
+          _bookingAmountHeader(
+            b,
+            amount: bahtLabel(b.ownerNet),
+            subtitle: 'สุทธิรับ',
           ),
           const SizedBox(height: 8),
           Text(
@@ -1081,19 +1089,12 @@ class _HomePageState extends State<HomePage> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: () async {
-                        final r = await askReason(
-                          context,
-                          'ระบุเหตุผลที่ปฏิเสธคำขอ',
-                        );
-                        if (r != null && mounted) {
-                          perform(
-                            context,
-                            () => _bookingCtrl.ownerReviewAsync(b.id, false, r),
-                            'ปฏิเสธคำขอจองแล้ว',
-                          );
-                        }
-                      },
+                      onPressed: () => performWithReason(
+                        context,
+                        'ระบุเหตุผลที่ปฏิเสธคำขอ',
+                        (r) => _bookingCtrl.ownerReviewAsync(b.id, false, r),
+                        'ปฏิเสธคำขอจองแล้ว',
+                      ),
                       icon: const Icon(Icons.close, size: 16),
                       label: const Text('ปฏิเสธคำขอ'),
                     ),
@@ -1128,16 +1129,11 @@ class _HomePageState extends State<HomePage> {
               b.status == BookingStatus.slipRejected,
         )
         .toList();
-    final historyStatuses = [
-      BookingStatus.completed,
-      BookingStatus.canceled,
-      BookingStatus.ownerRejected,
-    ];
     final active = all
-        .where((b) => !historyStatuses.contains(b.status))
+        .where((b) => !_historyStatuses.contains(b.status))
         .toList();
     final history = all
-        .where((b) => historyStatuses.contains(b.status))
+        .where((b) => _historyStatuses.contains(b.status))
         .toList();
 
     final tabFiltered = switch (renterBookingTab) {
@@ -1148,41 +1144,27 @@ class _HomePageState extends State<HomePage> {
     final list = tabFiltered
         .where((b) => filter == null || b.status == filter)
         .toList();
-    final theme = Theme.of(context);
+    final scheme = Theme.of(context).colorScheme;
     return PageBody(
       children: [
         heading('การจองของฉัน', 'ติดตามสถานะคำขอ สลิป และประวัติการใช้งาน'),
         if (actionRequired.isNotEmpty)
-          Container(
+          NoticeBanner(
+            icon: Icons.notifications_active_outlined,
+            useErrorContainer: true,
+            radius: 10,
             margin: const EdgeInsets.only(bottom: 14),
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.errorContainer.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(10),
+            textStyle: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: scheme.error,
             ),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.notifications_active_outlined,
-                  color: theme.colorScheme.error,
-                  size: 18,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'มี ${actionRequired.length} รายการรอคุณชำระเงินหรือแนบสลิปใหม่',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: theme.colorScheme.error,
-                    ),
-                  ),
-                ),
-                TextButton(
-                  onPressed: () => bookingDetail(actionRequired.first),
-                  child: const Text('ดำเนินการ'),
-                ),
-              ],
+            message:
+                'มี ${actionRequired.length} รายการรอคุณชำระเงินหรือแนบสลิปใหม่',
+            trailing: TextButton(
+              onPressed: () => bookingDetail(actionRequired.first),
+              child: const Text('ดำเนินการ'),
             ),
           ),
         TabStrip(
@@ -1202,76 +1184,29 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget statusFilter() {
-    void openStatusSheet() {
-      showModalBottomSheet<void>(
-        context: context,
-        builder: (ctx) => SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'กรองตามสถานะการจอง',
-                  style: Theme.of(ctx).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    ChoiceChip(
-                      label: const Text('ทั้งหมด'),
-                      selected: filter == null,
-                      onSelected: (_) {
-                        setState(() => filter = null);
-                        Navigator.pop(ctx);
-                      },
-                    ),
-                    for (final s in BookingStatus.values)
-                      ChoiceChip(
-                        label: Text(s.label),
-                        selected: filter == s,
-                        onSelected: (_) {
-                          setState(() => filter = s);
-                          Navigator.pop(ctx);
-                        },
-                      ),
-                  ],
-                ),
-              ],
-            ),
+  Widget statusFilter() => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        OutlinedButton.icon(
+          key: const ValueKey('booking-status-filter-btn'),
+          onPressed: _openBookingStatusSheet,
+          icon: const Icon(Icons.filter_list, size: 18),
+          label: Text(
+            filter == null ? 'ตัวกรองสถานะ' : 'สถานะ: ${filter!.label}',
           ),
         ),
-      );
-    }
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          OutlinedButton.icon(
-            key: const ValueKey('booking-status-filter-btn'),
-            onPressed: openStatusSheet,
-            icon: const Icon(Icons.filter_list, size: 18),
-            label: Text(
-              filter == null ? 'ตัวกรองสถานะ' : 'สถานะ: ${filter!.label}',
-            ),
+        if (filter != null)
+          TextButton(
+            onPressed: () => setState(() => filter = null),
+            child: const Text('ล้าง'),
           ),
-          if (filter != null)
-            TextButton(
-              onPressed: () => setState(() => filter = null),
-              child: const Text('ล้าง'),
-            ),
-        ],
-      ),
-    );
-  }
+      ],
+    ),
+  );
 
   List<(String, String, IconData, BadgeTone, VoidCallback)> _dashboardStats(
     List<Booking> bookings,
@@ -1339,68 +1274,88 @@ class _HomePageState extends State<HomePage> {
     ];
   }
 
-  Widget _ownerUrgentBanner(
-    int pendingRequests,
-    int readyToComplete,
-    bool missingBank,
-  ) {
-    final total =
-        pendingRequests + readyToComplete + (missingBank ? 1 : 0);
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: scheme.errorContainer.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.notifications_active_outlined,
-                color: scheme.error,
-                size: 18,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'แจ้งเตือนผู้ให้เช่า ($total รายการ)',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: scheme.error,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: [
-              if (pendingRequests > 0)
+  Widget _urgentBanner({
+    required IconData icon,
+    required String title,
+    required List<Widget> chips,
+  }) => NoticeBanner(
+    icon: icon,
+    useErrorContainer: true,
+    radius: 10,
+    margin: const EdgeInsets.only(bottom: 16),
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+    textStyle: TextStyle(
+      fontSize: 13,
+      fontWeight: FontWeight.w700,
+      color: Theme.of(context).colorScheme.error,
+    ),
+    message: title,
+    chips: chips,
+  );
+
+  Widget dashboard() {
+    final bookings = store.visibleBookings();
+    final isOwner = user.role == UserRole.owner;
+    final mine = store.spaces
+        .where((s) => !isOwner || s.ownerId == user.id)
+        .toList();
+    final pendingSpaces = store.spaces
+        .where((s) => s.status == SpaceStatus.pending)
+        .length;
+    final slipReviews = bookings
+        .where((b) => b.status == BookingStatus.slipReview)
+        .length;
+    final openIssues = store.issues.where((i) => !i.closed).length;
+    final readyPayouts = bookings
+        .where(
+          (b) => b.status == BookingStatus.completed && b.paidOutAt == null,
+        )
+        .length;
+    final ownerPendingRequests = bookings
+        .where((b) => b.status == BookingStatus.ownerReview)
+        .length;
+    final ownerReadyToComplete = bookings
+        .where(
+          (b) =>
+              b.status == BookingStatus.confirmed &&
+              !store.clock().isBefore(b.endsAt),
+        )
+        .length;
+    final ownerMissingBank = isOwner && user.bankInfo.trim().isEmpty;
+    final ownerTotal =
+        ownerPendingRequests + ownerReadyToComplete + (ownerMissingBank ? 1 : 0);
+    final adminTotal = pendingSpaces + slipReviews + openIssues + readyPayouts;
+    final stats = _dashboardStats(bookings, mine, isOwner);
+    return PageBody(
+      children: [
+        heading(
+          'ภาพรวม',
+          'สวัสดี ${user.name} • แตะการ์ดเพื่อเข้าสู่หมวดหมู่ได้ทันที',
+        ),
+        if (isOwner && ownerTotal > 0)
+          _urgentBanner(
+            icon: Icons.notifications_active_outlined,
+            title: 'แจ้งเตือนผู้ให้เช่า ($ownerTotal รายการ)',
+            chips: [
+              if (ownerPendingRequests > 0)
                 ActionChip(
                   avatar: const Icon(Icons.pending_actions_outlined, size: 14),
-                  label: Text('คำขอรออนุมัติ ($pendingRequests)'),
+                  label: Text('คำขอรออนุมัติ ($ownerPendingRequests)'),
                   onPressed: () {
                     setState(() => bookingTab = 0);
                     select(2, status: BookingStatus.ownerReview);
                   },
                 ),
-              if (readyToComplete > 0)
+              if (ownerReadyToComplete > 0)
                 ActionChip(
                   avatar: const Icon(Icons.check_circle_outline, size: 14),
-                  label: Text('รอกดยืนยันจบงาน ($readyToComplete)'),
+                  label: Text('รอกดยืนยันจบงาน ($ownerReadyToComplete)'),
                   onPressed: () {
                     setState(() => bookingTab = 0);
                     select(2, status: BookingStatus.confirmed);
                   },
                 ),
-              if (missingBank)
+              if (ownerMissingBank)
                 ActionChip(
                   avatar: const Icon(Icons.account_balance_outlined, size: 14),
                   label: const Text('ยังไม่ได้ระบุบัญชีรับเงิน'),
@@ -1408,50 +1363,11 @@ class _HomePageState extends State<HomePage> {
                 ),
             ],
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _adminUrgentBanner(
-    int pendingSpaces,
-    int slipReviews,
-    int openIssues,
-    int readyPayouts,
-  ) {
-    final total = pendingSpaces + slipReviews + openIssues + readyPayouts;
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: scheme.errorContainer.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.warning_amber_rounded, color: scheme.error, size: 18),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'งานด่วนที่ต้องดำเนินการ ($total รายการ)',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: scheme.error,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: [
+        if (!isOwner && adminTotal > 0)
+          _urgentBanner(
+            icon: Icons.warning_amber_rounded,
+            title: 'งานด่วนที่ต้องดำเนินการ ($adminTotal รายการ)',
+            chips: [
               if (slipReviews > 0)
                 ActionChip(
                   avatar: const Icon(Icons.receipt_long, size: 14),
@@ -1488,87 +1404,17 @@ class _HomePageState extends State<HomePage> {
                 ),
             ],
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget dashboard() {
-    final bookings = store.visibleBookings();
-    final isOwner = user.role == UserRole.owner;
-    final mine = store.spaces
-        .where((s) => !isOwner || s.ownerId == user.id)
-        .toList();
-    final pendingSpaces = store.spaces
-        .where((s) => s.status == SpaceStatus.pending)
-        .length;
-    final slipReviews = bookings
-        .where((b) => b.status == BookingStatus.slipReview)
-        .length;
-    final openIssues = store.issues.where((i) => !i.closed).length;
-    final readyPayouts = bookings
-        .where(
-          (b) => b.status == BookingStatus.completed && b.paidOutAt == null,
-        )
-        .length;
-    final ownerPendingRequests = bookings
-        .where((b) => b.status == BookingStatus.ownerReview)
-        .length;
-    final ownerReadyToComplete = bookings
-        .where(
-          (b) =>
-              b.status == BookingStatus.confirmed &&
-              !store.clock().isBefore(b.endsAt),
-        )
-        .length;
-    final ownerMissingBank = isOwner && user.bankInfo.trim().isEmpty;
-    final stats = _dashboardStats(bookings, mine, isOwner);
-    return PageBody(
-      children: [
-        heading(
-          'ภาพรวม',
-          'สวัสดี ${user.name} • แตะการ์ดเพื่อเข้าสู่หมวดหมู่ได้ทันที',
-        ),
-        if (isOwner &&
-            (ownerPendingRequests > 0 ||
-                ownerReadyToComplete > 0 ||
-                ownerMissingBank))
-          _ownerUrgentBanner(
-            ownerPendingRequests,
-            ownerReadyToComplete,
-            ownerMissingBank,
-          ),
-        if (!isOwner &&
-            (pendingSpaces + slipReviews + openIssues + readyPayouts) > 0)
-          _adminUrgentBanner(
-            pendingSpaces,
-            slipReviews,
-            openIssues,
-            readyPayouts,
-          ),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final tileWidth = constraints.maxWidth < 400
-                ? (constraints.maxWidth - 12) / 2
-                : 230.0;
-            return Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                for (final (label, value, icon, tone, onTap) in stats)
-                  SizedBox(
-                    width: tileWidth,
-                    child: StatTile(
-                      label: label,
-                      value: value,
-                      icon: icon,
-                      tone: tone,
-                      onTap: onTap,
-                    ),
-                  ),
-              ],
-            );
-          },
+        StatGrid(
+          tiles: [
+            for (final (label, value, icon, tone, onTap) in stats)
+              StatTile(
+                label: label,
+                value: value,
+                icon: icon,
+                tone: tone,
+                onTap: onTap,
+              ),
+          ],
         ),
         const SizedBox(height: 20),
         const SectionHeader('การจองล่าสุด'),
@@ -1749,20 +1595,16 @@ class _HomePageState extends State<HomePage> {
 
   Widget ownerReservations() {
     final all = store.visibleBookings();
-    final history = [
-      BookingStatus.completed,
-      BookingStatus.canceled,
-      BookingStatus.ownerRejected,
-    ];
     final list =
         all
             .where(
               (b) =>
                   (bookingTab == 2
-                      ? history.contains(b.status)
+                      ? _historyStatuses.contains(b.status)
                       : bookingTab == 1
-                      ? b.coversDate(calendarDate) && !history.contains(b.status)
-                      : !history.contains(b.status)) &&
+                      ? b.coversDate(calendarDate) &&
+                            !_historyStatuses.contains(b.status)
+                      : !_historyStatuses.contains(b.status)) &&
                   (filter == null || b.status == filter),
             )
             .toList()
@@ -1835,67 +1677,43 @@ class _HomePageState extends State<HomePage> {
             ActionChip(
               avatar: const Icon(Icons.copy_outlined, size: 15),
               label: const Text('คัดลอกสรุปรายรับ'),
-              onPressed: () async {
-                final todayStr = dateLabel(DateTime.now());
-                final summary =
-                    '[รายงานรายรับ RentSpace สำหรับผู้ให้เช่า]\n'
-                    'วันที่: $todayStr\n'
+              onPressed: () => copyToClipboard(
+                context,
+                '[รายงานรายรับ RentSpace สำหรับผู้ให้เช่า]\n'
+                    'วันที่: ${dateLabel(DateTime.now())}\n'
                     'เจ้าของพื้นที่: ${user.name}\n'
                     'บัญชีรับเงิน: ${user.bankInfo.isEmpty ? "ยังไม่ระบุ" : user.bankInfo}\n'
                     '• รอใช้บริการ (สุทธิ): ${bahtLabel(held)}\n'
                     '• พร้อมจ่าย รอ Admin โอน (สุทธิ): ${bahtLabel(pending)}\n'
                     '• จ่ายแล้ว (สุทธิ): ${bahtLabel(paid)}\n'
-                    '• รายการเสร็จสิ้นทั้งหมด: ${completed.length} รายการ';
-                Clipboard.setData(ClipboardData(text: summary));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('คัดลอกสรุปรายรับลง Clipboard แล้ว'),
-                    duration: Duration(seconds: 2),
-                  ),
-                );
-              },
+                    '• รายการเสร็จสิ้นทั้งหมด: ${completed.length} รายการ',
+                'คัดลอกสรุปรายรับลง Clipboard แล้ว',
+                duration: const Duration(seconds: 2),
+              ),
             ),
           ],
         ),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final tileWidth = constraints.maxWidth < 400
-                ? (constraints.maxWidth - 12) / 2
-                : 230.0;
-            return Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                SizedBox(
-                  width: tileWidth,
-                  child: StatTile(
-                    label: 'รอใช้บริการ (สุทธิ)',
-                    value: bahtLabel(held),
-                    icon: Icons.hourglass_empty,
-                    tone: BadgeTone.warning,
-                  ),
-                ),
-                SizedBox(
-                  width: tileWidth,
-                  child: StatTile(
-                    label: 'พร้อมจ่าย (สุทธิ)',
-                    value: bahtLabel(pending),
-                    icon: Icons.payments_outlined,
-                    tone: BadgeTone.primary,
-                  ),
-                ),
-                SizedBox(
-                  width: tileWidth,
-                  child: StatTile(
-                    label: 'จ่ายแล้ว (สุทธิ)',
-                    value: bahtLabel(paid),
-                    icon: Icons.check_circle_outline,
-                    tone: BadgeTone.success,
-                  ),
-                ),
-              ],
-            );
-          },
+        StatGrid(
+          tiles: [
+            StatTile(
+              label: 'รอใช้บริการ (สุทธิ)',
+              value: bahtLabel(held),
+              icon: Icons.hourglass_empty,
+              tone: BadgeTone.warning,
+            ),
+            StatTile(
+              label: 'พร้อมจ่าย (สุทธิ)',
+              value: bahtLabel(pending),
+              icon: Icons.payments_outlined,
+              tone: BadgeTone.primary,
+            ),
+            StatTile(
+              label: 'จ่ายแล้ว (สุทธิ)',
+              value: bahtLabel(paid),
+              icon: Icons.check_circle_outline,
+              tone: BadgeTone.success,
+            ),
+          ],
         ),
         const SizedBox(height: 20),
         if (user.role == UserRole.owner)
@@ -1920,15 +1738,12 @@ class _HomePageState extends State<HomePage> {
                 if (user.bankInfo.isNotEmpty)
                   IconButton(
                     tooltip: 'คัดลอกเลขบัญชี',
-                    onPressed: () async {
-                      Clipboard.setData(ClipboardData(text: user.bankInfo));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('คัดลอกบัญชี ${user.bankInfo} แล้ว'),
-                          duration: const Duration(seconds: 2),
-                        ),
-                      );
-                    },
+                    onPressed: () => copyToClipboard(
+                      context,
+                      user.bankInfo,
+                      'คัดลอกบัญชี ${user.bankInfo} แล้ว',
+                      duration: const Duration(seconds: 2),
+                    ),
                     icon: Icon(
                       Icons.copy_outlined,
                       size: 16,
@@ -2059,30 +1874,7 @@ class _HomePageState extends State<HomePage> {
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
-                    children: [
-                      FilledButton(
-                        onPressed: () => perform(
-                          context,
-                          () => _spaceCtrl.reviewAsync(s.id, true, ''),
-                        ),
-                        child: const Text('อนุมัติประกาศ'),
-                      ),
-                      OutlinedButton(
-                        onPressed: () async {
-                          final r = await askReason(
-                            context,
-                            'เหตุผลไม่อนุมัติ',
-                          );
-                          if (r != null && mounted) {
-                            perform(
-                              context,
-                              () => _spaceCtrl.reviewAsync(s.id, false, r),
-                            );
-                          }
-                        },
-                        child: const Text('ปฏิเสธประกาศ'),
-                      ),
-                    ],
+                    children: _spaceApprovalButtons(s),
                   ),
                 ],
               ),
@@ -2090,51 +1882,13 @@ class _HomePageState extends State<HomePage> {
         ] else if (adminTab == 1) ...[
           if (store.issues.isEmpty) empty('ยังไม่มีรายงานปัญหา'),
           for (final i in store.issues)
-            SurfaceCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          i.subject,
-                          style: theme.textTheme.titleSmall,
-                        ),
-                      ),
-                      StatusBadge(
-                        i.closed ? 'ปิดแล้ว' : 'รอดำเนินการ',
-                        tone: i.closed ? BadgeTone.success : BadgeTone.warning,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'ผู้แจ้ง: ${store.user(i.reporterId).name}',
-                    style: theme.textTheme.bodySmall,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(i.detail, style: theme.textTheme.bodyMedium),
-                  if (i.closed) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      'ผลการแก้ไข: ${i.resolution}',
-                      style: theme.textTheme.bodySmall,
-                    ),
-                  ] else
-                    TextButton(
-                      onPressed: () async {
-                        final r = await askReason(context, 'ผลการแก้ไขปัญหา');
-                        if (r != null && mounted) {
-                          perform(
-                            context,
-                            () => _spaceCtrl.closeIssueAsync(i.id, r),
-                          );
-                        }
-                      },
-                      child: const Text('บันทึกผลและปิดรายงาน'),
-                    ),
-                ],
+            _IssueCard(
+              issue: i,
+              reporterName: store.user(i.reporterId).name,
+              onClose: () => performWithReason(
+                context,
+                'ผลการแก้ไขปัญหา',
+                (r) => _spaceCtrl.closeIssueAsync(i.id, r),
               ),
             ),
         ] else ...[
@@ -2142,144 +1896,111 @@ class _HomePageState extends State<HomePage> {
             spacing: 6,
             runSpacing: 6,
             children: [
-              ChoiceChip(
-                label: Text('ทั้งหมด (${store.spaces.length})'),
-                selected: allSpacesFilter == 0,
-                onSelected: (_) => setState(() => allSpacesFilter = 0),
-              ),
-              ChoiceChip(
-                label: Text(
-                  'เปิดใช้งาน (${store.spaces.where((s) => s.status == SpaceStatus.approved).length})',
+              for (final (idx, label, statusFilter) in const [
+                (0, 'ทั้งหมด', null),
+                (1, 'เปิดใช้งาน', SpaceStatus.approved),
+                (2, 'ถูกระงับ', SpaceStatus.rejected),
+                (3, 'รอตรวจ', SpaceStatus.pending),
+              ])
+                ChoiceChip(
+                  label: Text(
+                    '$label (${statusFilter == null ? store.spaces.length : store.spaces.where((s) => s.status == statusFilter).length})',
+                  ),
+                  selected: allSpacesFilter == idx,
+                  onSelected: (_) => setState(() => allSpacesFilter = idx),
                 ),
-                selected: allSpacesFilter == 1,
-                onSelected: (_) => setState(() => allSpacesFilter = 1),
-              ),
-              ChoiceChip(
-                label: Text(
-                  'ถูกระงับ (${store.spaces.where((s) => s.status == SpaceStatus.rejected).length})',
-                ),
-                selected: allSpacesFilter == 2,
-                onSelected: (_) => setState(() => allSpacesFilter = 2),
-              ),
-              ChoiceChip(
-                label: Text(
-                  'รอตรวจ (${store.spaces.where((s) => s.status == SpaceStatus.pending).length})',
-                ),
-                selected: allSpacesFilter == 3,
-                onSelected: (_) => setState(() => allSpacesFilter = 3),
-              ),
             ],
           ),
           const SizedBox(height: 12),
-          if (store.spaces.where((s) {
-            if (allSpacesFilter == 1) return s.status == SpaceStatus.approved;
-            if (allSpacesFilter == 2) return s.status == SpaceStatus.rejected;
-            if (allSpacesFilter == 3) return s.status == SpaceStatus.pending;
-            return true;
-          }).isEmpty)
-            empty('ไม่มีพื้นที่ในสถานะนี้'),
-          for (final s in store.spaces.where((s) {
-            if (allSpacesFilter == 1) return s.status == SpaceStatus.approved;
-            if (allSpacesFilter == 2) return s.status == SpaceStatus.rejected;
-            if (allSpacesFilter == 3) return s.status == SpaceStatus.pending;
-            return true;
-          }))
-            SurfaceCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+          ...() {
+            final targetStatus = switch (allSpacesFilter) {
+              1 => SpaceStatus.approved,
+              2 => SpaceStatus.rejected,
+              3 => SpaceStatus.pending,
+              _ => null,
+            };
+            final filteredSpaces = targetStatus == null
+                ? store.spaces
+                : store.spaces.where((s) => s.status == targetStatus).toList();
+            if (filteredSpaces.isEmpty) {
+              return [empty('ไม่มีพื้นที่ในสถานะนี้')];
+            }
+            return [
+              for (final s in filteredSpaces)
+                SurfaceCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Text(s.name, style: theme.textTheme.titleMedium),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              s.name,
+                              style: theme.textTheme.titleMedium,
+                            ),
+                          ),
+                          StatusBadge(
+                            s.status.label,
+                            tone: spaceTone(s.status),
+                          ),
+                        ],
                       ),
-                      StatusBadge(s.status.label, tone: spaceTone(s.status)),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'เจ้าของ: ${store.user(s.ownerId).name} • โทร: ${store.user(s.ownerId).phoneLabel}',
-                    style: theme.textTheme.bodySmall,
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    '${s.category} • ${s.location} • ${bahtLabel(s.price)}/ชม. • ${s.capacity} คน',
-                    style: theme.textTheme.bodyMedium,
-                  ),
-                  if (s.reviewReason.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      'หมายเหตุ: ${s.reviewReason}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: toneColor(context, BadgeTone.danger),
+                      const SizedBox(height: 4),
+                      Text(
+                        'เจ้าของ: ${store.user(s.ownerId).name} • โทร: ${store.user(s.ownerId).phoneLabel}',
+                        style: theme.textTheme.bodySmall,
                       ),
-                    ),
-                  ],
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      if (s.status == SpaceStatus.approved)
-                        OutlinedButton.icon(
-                          onPressed: () async {
-                            final r = await askReason(
-                              context,
-                              'ระบุเหตุผลที่ระงับประกาศ',
-                            );
-                            if (r != null && mounted) {
-                              perform(
-                                context,
-                                () => _spaceCtrl.suspendSpaceAsync(s.id, r),
-                              );
-                            }
-                          },
-                          icon: const Icon(Icons.block, size: 16),
-                          label: const Text('ระงับประกาศ'),
-                        ),
-                      if (s.status == SpaceStatus.rejected)
-                        FilledButton.icon(
-                          onPressed: () => perform(
-                            context,
-                            () =>
-                                _spaceCtrl.activateSpaceAsync(s.id),
+                      const SizedBox(height: 6),
+                      Text(
+                        '${s.category} • ${s.location} • ${bahtLabel(s.price)}/ชม. • ${s.capacity} คน',
+                        style: theme.textTheme.bodyMedium,
+                      ),
+                      if (s.reviewReason.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          'หมายเหตุ: ${s.reviewReason}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: toneColor(context, BadgeTone.danger),
                           ),
-                          icon: const Icon(
-                            Icons.check_circle_outline,
-                            size: 16,
-                          ),
-                          label: const Text('เปิดใช้งานใหม่'),
-                        ),
-                      if (s.status == SpaceStatus.pending) ...[
-                        FilledButton(
-                          onPressed: () => perform(
-                            context,
-                            () => _spaceCtrl.reviewAsync(s.id, true, ''),
-                          ),
-                          child: const Text('อนุมัติประกาศ'),
-                        ),
-                        OutlinedButton(
-                          onPressed: () async {
-                            final r = await askReason(
-                              context,
-                              'เหตุผลไม่อนุมัติ',
-                            );
-                            if (r != null && mounted) {
-                              perform(
-                                context,
-                                () => _spaceCtrl.reviewAsync(s.id, false, r),
-                              );
-                            }
-                          },
-                          child: const Text('ปฏิเสธประกาศ'),
                         ),
                       ],
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          if (s.status == SpaceStatus.approved)
+                            OutlinedButton.icon(
+                              onPressed: () => performWithReason(
+                                context,
+                                'ระบุเหตุผลที่ระงับประกาศ',
+                                (r) => _spaceCtrl.suspendSpaceAsync(s.id, r),
+                              ),
+                              icon: const Icon(Icons.block, size: 16),
+                              label: const Text('ระงับประกาศ'),
+                            ),
+                          if (s.status == SpaceStatus.rejected)
+                            FilledButton.icon(
+                              onPressed: () => perform(
+                                context,
+                                () => _spaceCtrl.activateSpaceAsync(s.id),
+                              ),
+                              icon: const Icon(
+                                Icons.check_circle_outline,
+                                size: 16,
+                              ),
+                              label: const Text('เปิดใช้งานใหม่'),
+                            ),
+                          if (s.status == SpaceStatus.pending)
+                            ..._spaceApprovalButtons(s),
+                        ],
+                      ),
                     ],
                   ),
-                ],
-              ),
-            ),
+                ),
+            ];
+          }(),
         ],
       ],
     );
@@ -2316,72 +2037,47 @@ class _HomePageState extends State<HomePage> {
               (!pendingPayoutOnly || b.paidOutAt == null),
         )
         .toList();
+    void setFinanceFilter(BookingStatus? status, [bool pendingOnly = false]) =>
+        setState(() {
+          filter = status;
+          pendingPayoutOnly = pendingOnly;
+        });
     return PageBody(
       children: [
         heading(
           'การจองและการเงิน',
           'ตรวจสอบสลิปเงินเข้า บัญชีตัวกลาง และบันทึกจ่ายเงินเจ้าของพื้นที่',
         ),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final tileWidth = constraints.maxWidth < 400
-                ? (constraints.maxWidth - 12) / 2
-                : 220.0;
-            return Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                SizedBox(
-                  width: tileWidth,
-                  child: StatTile(
-                    label: 'สลิปรอตรวจ',
-                    value: '$slipReviewCount รายการ',
-                    icon: Icons.receipt_long_outlined,
-                    tone: slipReviewCount > 0
-                        ? BadgeTone.warning
-                        : BadgeTone.neutral,
-                    onTap: () => setState(() {
-                      filter = BookingStatus.slipReview;
-                      pendingPayoutOnly = false;
-                    }),
-                  ),
-                ),
-                SizedBox(
-                  width: tileWidth,
-                  child: StatTile(
-                    label: 'รอโอนให้เจ้าของ',
-                    value: '$readyPayoutCount รายการ',
-                    icon: Icons.payments_outlined,
-                    tone: readyPayoutCount > 0
-                        ? BadgeTone.info
-                        : BadgeTone.neutral,
-                    onTap: () => setState(() {
-                      filter = BookingStatus.completed;
-                      pendingPayoutOnly = true;
-                    }),
-                  ),
-                ),
-                SizedBox(
-                  width: tileWidth,
-                  child: StatTile(
-                    label: 'เงินตัวกลางถือไว้',
-                    value: bahtLabel(escrowHolding),
-                    icon: Icons.account_balance_outlined,
-                    tone: BadgeTone.primary,
-                  ),
-                ),
-                SizedBox(
-                  width: tileWidth,
-                  child: StatTile(
-                    label: 'ค่าบริการสะสม (5%)',
-                    value: bahtLabel(platformRevenue),
-                    icon: Icons.savings_outlined,
-                    tone: BadgeTone.success,
-                  ),
-                ),
-              ],
-            );
-          },
+        StatGrid(
+          desktopWidth: 220,
+          tiles: [
+            StatTile(
+              label: 'สลิปรอตรวจ',
+              value: '$slipReviewCount รายการ',
+              icon: Icons.receipt_long_outlined,
+              tone: slipReviewCount > 0 ? BadgeTone.warning : BadgeTone.neutral,
+              onTap: () => setFinanceFilter(BookingStatus.slipReview),
+            ),
+            StatTile(
+              label: 'รอโอนให้เจ้าของ',
+              value: '$readyPayoutCount รายการ',
+              icon: Icons.payments_outlined,
+              tone: readyPayoutCount > 0 ? BadgeTone.info : BadgeTone.neutral,
+              onTap: () => setFinanceFilter(BookingStatus.completed, true),
+            ),
+            StatTile(
+              label: 'เงินตัวกลางถือไว้',
+              value: bahtLabel(escrowHolding),
+              icon: Icons.account_balance_outlined,
+              tone: BadgeTone.primary,
+            ),
+            StatTile(
+              label: 'ค่าบริการสะสม (5%)',
+              value: bahtLabel(platformRevenue),
+              icon: Icons.savings_outlined,
+              tone: BadgeTone.success,
+            ),
+          ],
         ),
         const SizedBox(height: 12),
         Wrap(
@@ -2392,78 +2088,22 @@ class _HomePageState extends State<HomePage> {
             ChoiceChip(
               label: const Text('ทั้งหมด'),
               selected: filter == null,
-              onSelected: (_) => setState(() {
-                filter = null;
-                pendingPayoutOnly = false;
-              }),
+              onSelected: (_) => setFinanceFilter(null),
             ),
             ChoiceChip(
               label: Text('รอตรวจสลิป ($slipReviewCount)'),
               selected: filter == BookingStatus.slipReview,
-              onSelected: (_) => setState(() {
-                filter = BookingStatus.slipReview;
-                pendingPayoutOnly = false;
-              }),
+              onSelected: (_) => setFinanceFilter(BookingStatus.slipReview),
             ),
             ChoiceChip(
               label: Text('รอจ่ายเจ้าของ ($readyPayoutCount)'),
               selected: filter == BookingStatus.completed && pendingPayoutOnly,
-              onSelected: (_) => setState(() {
-                filter = BookingStatus.completed;
-                pendingPayoutOnly = true;
-              }),
+              onSelected: (_) =>
+                  setFinanceFilter(BookingStatus.completed, true),
             ),
             OutlinedButton.icon(
-              onPressed: () async {
-                showModalBottomSheet<void>(
-                  context: context,
-                  builder: (ctx) => SafeArea(
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text(
-                            'กรองตามสถานะการจอง',
-                            style: Theme.of(ctx).textTheme.titleMedium,
-                          ),
-                          const SizedBox(height: 12),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              ChoiceChip(
-                                label: const Text('ทั้งหมด'),
-                                selected: filter == null,
-                                onSelected: (_) {
-                                  setState(() {
-                                    filter = null;
-                                    pendingPayoutOnly = false;
-                                  });
-                                  Navigator.pop(ctx);
-                                },
-                              ),
-                              for (final s in BookingStatus.values)
-                                ChoiceChip(
-                                  label: Text(s.label),
-                                  selected: filter == s,
-                                  onSelected: (_) {
-                                    setState(() {
-                                      filter = s;
-                                      pendingPayoutOnly = false;
-                                    });
-                                    Navigator.pop(ctx);
-                                  },
-                                ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-              },
+              onPressed: () =>
+                  _openBookingStatusSheet(resetPendingPayout: true),
               icon: const Icon(Icons.tune, size: 16),
               label: Text(
                 filter != null &&
@@ -2476,24 +2116,18 @@ class _HomePageState extends State<HomePage> {
             ActionChip(
               avatar: const Icon(Icons.copy_outlined, size: 15),
               label: const Text('คัดลอกสรุปการเงิน'),
-              onPressed: () async {
-                final todayStr = dateLabel(DateTime.now());
-                final summary =
-                    '[รายงานสรุปการเงิน RentSpace]\n'
-                    'วันที่: $todayStr\n'
+              onPressed: () => copyToClipboard(
+                context,
+                '[รายงานสรุปการเงิน RentSpace]\n'
+                    'วันที่: ${dateLabel(DateTime.now())}\n'
                     '• สลิปรอตรวจ: $slipReviewCount รายการ\n'
                     '• รอโอนให้เจ้าของ: $readyPayoutCount รายการ\n'
                     '• เงินตัวกลางถือไว้ (Escrow): ${bahtLabel(escrowHolding)}\n'
                     '• รายได้ค่าบริการสะสม (5%): ${bahtLabel(platformRevenue)}\n'
-                    '• จำนวนการจองทั้งหมด: ${store.bookings.length} รายการ';
-                Clipboard.setData(ClipboardData(text: summary));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('คัดลอกสรุปบัญชีการเงินแล้ว'),
-                    duration: Duration(seconds: 2),
-                  ),
-                );
-              },
+                    '• จำนวนการจองทั้งหมด: ${store.bookings.length} รายการ',
+                'คัดลอกสรุปบัญชีการเงินแล้ว',
+                duration: const Duration(seconds: 2),
+              ),
             ),
           ],
         ),
@@ -2514,24 +2148,13 @@ class _HomePageState extends State<HomePage> {
     return PageBody(
       children: [
         heading('จัดการผู้ใช้', 'เปิด/ปิดการใช้งานบัญชี และตรวจสอบสิทธิ์'),
-        TextField(
+        _clearableSearchField(
           key: const ValueKey('user-search-field'),
           controller: userSearchController,
+          value: userQuery,
+          hint: 'ค้นหาชื่อหรืออีเมลผู้ใช้',
+          iconSize: 19,
           onChanged: (v) => setState(() => userQuery = v),
-          decoration: InputDecoration(
-            prefixIcon: const Icon(Icons.search, size: 19),
-            suffixIcon: userQuery.isEmpty
-                ? null
-                : IconButton(
-                    tooltip: 'ล้างคำค้นหา',
-                    onPressed: () async {
-                      userSearchController.clear();
-                      setState(() => userQuery = '');
-                    },
-                    icon: const Icon(Icons.close, size: 18),
-                  ),
-            hintText: 'ค้นหาชื่อหรืออีเมลผู้ใช้',
-          ),
         ),
         const SizedBox(height: 10),
         Wrap(
@@ -2607,29 +2230,9 @@ class _HomePageState extends State<HomePage> {
                               ),
                             ),
                             const SizedBox(width: 4),
-                            InkWell(
-                              borderRadius: BorderRadius.circular(4),
-                              onTap: () async {
-                                Clipboard.setData(
-                                  ClipboardData(text: u.bankInfo),
-                                );
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      'คัดลอกบัญชี ${u.bankInfo} แล้ว',
-                                    ),
-                                    duration: const Duration(seconds: 2),
-                                  ),
-                                );
-                              },
-                              child: Padding(
-                                padding: const EdgeInsets.all(2.0),
-                                child: Icon(
-                                  Icons.copy_outlined,
-                                  size: 13,
-                                  color: scheme.primary,
-                                ),
-                              ),
+                            CopyIconButton(
+                              text: u.bankInfo,
+                              message: 'คัดลอกบัญชี ${u.bankInfo} แล้ว',
                             ),
                           ],
                         ),
@@ -2656,288 +2259,6 @@ class _HomePageState extends State<HomePage> {
                       () => _authCtrl.toggleUserAsync(u.id),
                     ),
                   ),
-              ],
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-class _MobileTopBar extends StatelessWidget {
-  const _MobileTopBar({
-    required this.store,
-    required this.user,
-    required this.onHomeTap,
-    required this.onProfileTap,
-    required this.onLogout,
-  });
-  final AppStore store;
-  final AppUser user;
-  final VoidCallback onHomeTap;
-  final VoidCallback onProfileTap;
-  final VoidCallback onLogout;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      height: 56,
-      padding: const EdgeInsets.fromLTRB(14, 0, 8, 0),
-      color: scheme.surfaceContainerLow,
-      child: Row(
-        children: [
-          Expanded(
-            child: InkWell(
-              onTap: onHomeTap,
-              borderRadius: BorderRadius.circular(8),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 28,
-                    height: 28,
-                    decoration: BoxDecoration(
-                      color: scheme.primary,
-                      borderRadius: BorderRadius.circular(7),
-                    ),
-                    child: Icon(
-                      Icons.grid_view_rounded,
-                      size: 16,
-                      color: scheme.onPrimary,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: Text(
-                      'rentSPACE',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: scheme.onSurface,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          Tooltip(
-            message: '${user.name} (${user.role.label})',
-            child: InkWell(
-              onTap: onProfileTap,
-              customBorder: const CircleBorder(),
-              child: CircleAvatar(
-                radius: 13,
-                backgroundColor: scheme.primary.withValues(alpha: 0.12),
-                child: Text(
-                  _initial(user.name),
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: scheme.primary,
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          ThemeToggle(
-            dark: store.darkMode,
-            onChanged: (v) {
-              if (v != store.darkMode) store.toggleTheme();
-            },
-          ),
-          IconButton(
-            tooltip: 'ออกจากระบบ',
-            onPressed: onLogout,
-            icon: const Icon(Icons.logout),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class ProfilePanel extends StatefulWidget {
-  const ProfilePanel({super.key, required this.store, this.authController});
-  final AppStore store;
-  final AuthController? authController;
-  @override
-  State<ProfilePanel> createState() => _ProfilePanelState();
-}
-
-class _ProfilePanelState extends State<ProfilePanel> {
-  late final TextEditingController name;
-  late final TextEditingController email;
-  late final TextEditingController phone;
-  late final TextEditingController bankInfo;
-  final currentPassword = TextEditingController();
-  final newPassword = TextEditingController();
-  final confirmPassword = TextEditingController();
-  bool hidePassword = true;
-
-  @override
-  void initState() {
-    super.initState();
-    final initialUser = widget.store.currentUser;
-    name = TextEditingController(text: initialUser?.name ?? '');
-    email = TextEditingController(text: initialUser?.email ?? '');
-    phone = TextEditingController(text: initialUser?.phone ?? '');
-    bankInfo = TextEditingController(text: initialUser?.bankInfo ?? '');
-  }
-
-  @override
-  void dispose() {
-    name.dispose();
-    email.dispose();
-    phone.dispose();
-    bankInfo.dispose();
-    currentPassword.dispose();
-    newPassword.dispose();
-    confirmPassword.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final currentUser = widget.store.currentUser;
-    if (currentUser == null) return const SizedBox.shrink();
-    return PageBody(
-      children: [
-        heading('โปรไฟล์ของฉัน', currentUser.role.label),
-        SurfaceCard(
-          title: 'ข้อมูลบัญชี',
-          subtitle: 'แก้ไขข้อมูลที่ใช้ติดต่อและแสดงในระบบ',
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              formInput(name, 'ชื่อ-นามสกุล'),
-              formInput(email, 'อีเมล'),
-              formInput(
-                phone,
-                'เบอร์โทรศัพท์',
-                keyboardType: TextInputType.phone,
-              ),
-              if (currentUser.role == UserRole.owner)
-                formInput(
-                  bankInfo,
-                  'บัญชีธนาคารรับเงินโอน (เช่น กสิกรไทย 123-4-56789-0)',
-                ),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: FilledButton(
-                  onPressed: () => perform(
-                    context,
-                    () => (widget.authController ?? AuthController(widget.store))
-                        .updateProfileAsync(
-                      name.text,
-                      email.text,
-                      phone.text,
-                      bankInfo.text,
-                    ),
-                    'บันทึกโปรไฟล์แล้ว',
-                  ),
-                  child: const Text('บันทึกโปรไฟล์'),
-                ),
-              ),
-            ],
-          ),
-        ),
-        SurfaceCard(
-          title: 'เปลี่ยนรหัสผ่าน',
-          subtitle: 'รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร',
-          action: IconButton(
-            tooltip: hidePassword ? 'แสดงรหัสผ่าน' : 'ซ่อนรหัสผ่าน',
-            onPressed: () => setState(() => hidePassword = !hidePassword),
-            icon: Icon(
-              hidePassword
-                  ? Icons.visibility_outlined
-                  : Icons.visibility_off_outlined,
-              size: 18,
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              formInput(
-                currentPassword,
-                'รหัสผ่านปัจจุบัน',
-                obscure: hidePassword,
-              ),
-              formInput(
-                newPassword,
-                'รหัสผ่านใหม่ (อย่างน้อย 8 ตัวอักษร)',
-                obscure: hidePassword,
-              ),
-              formInput(
-                confirmPassword,
-                'ยืนยันรหัสผ่านใหม่',
-                obscure: hidePassword,
-              ),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: OutlinedButton.icon(
-                  onPressed: () async {
-                    final ok = await perform(
-                      context,
-                      () => (widget.authController ?? AuthController(widget.store))
-                          .changePasswordAsync(
-                        currentPassword.text,
-                        newPassword.text,
-                        confirmPassword.text,
-                      ),
-                      'เปลี่ยนรหัสผ่านเรียบร้อยแล้ว',
-                    );
-                    if (ok && context.mounted) {
-                      currentPassword.clear();
-                      newPassword.clear();
-                      confirmPassword.clear();
-                    }
-                  },
-                  icon: const Icon(Icons.lock_reset_outlined, size: 18),
-                  label: const Text('บันทึกรหัสผ่านใหม่'),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 20),
-        const SectionHeader('รายงานของฉัน'),
-        if (!widget.store.issues.any(
-          (i) => i.reporterId == currentUser.id,
-        ))
-          empty('ยังไม่มีรายงาน'),
-        for (final i in widget.store.issues.where(
-          (i) => i.reporterId == currentUser.id,
-        ))
-          SurfaceCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(i.subject, style: theme.textTheme.titleSmall),
-                    ),
-                    StatusBadge(
-                      i.closed ? 'ปิดแล้ว' : 'รอดำเนินการ',
-                      tone: i.closed ? BadgeTone.success : BadgeTone.warning,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(i.detail, style: theme.textTheme.bodySmall),
-                if (i.closed) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    'ผลการแก้ไข: ${i.resolution}',
-                    style: theme.textTheme.bodySmall,
-                  ),
-                ],
               ],
             ),
           ),
